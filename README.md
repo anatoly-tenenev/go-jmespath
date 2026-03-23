@@ -1,5 +1,7 @@
 # go-jmespath - A JMESPath implementation in Go
 
+**NOTE: This is a fork of [go-jmespath](https://github.com/jmespath/go-jmespath).**
+
 [![Build Status](https://img.shields.io/travis/jmespath/go-jmespath.svg)](https://travis-ci.org/jmespath/go-jmespath)
 
 
