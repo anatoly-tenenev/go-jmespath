@@ -247,7 +247,7 @@ func (lexer *Lexer) consumeLiteral() (token, error) {
 	if err != nil {
 		return token{}, err
 	}
-	value = strings.Replace(value, "\\`", "`", -1)
+	value = strings.ReplaceAll(value, "\\`", "`")
 	return token{
 		tokenType: tJSONLiteral,
 		value:     value,
@@ -335,21 +335,22 @@ func (lexer *Lexer) consumeLBracket() token {
 	start := lexer.currentPos - lexer.lastWidth
 	nextRune := lexer.next()
 	var t token
-	if nextRune == '?' {
+	switch nextRune {
+	case '?':
 		t = token{
 			tokenType: tFilter,
 			value:     "[?",
 			position:  start,
 			length:    2,
 		}
-	} else if nextRune == ']' {
+	case ']':
 		t = token{
 			tokenType: tFlatten,
 			value:     "[]",
 			position:  start,
 			length:    2,
 		}
-	} else {
+	default:
 		t = token{
 			tokenType: tLbracket,
 			value:     "[",
@@ -386,7 +387,7 @@ func (lexer *Lexer) consumeUnquotedIdentifier() token {
 	start := lexer.currentPos - lexer.lastWidth
 	for {
 		r := lexer.next()
-		if r < 0 || r > 128 || identifierTrailingBits[uint64(r)/64]&(1<<(uint64(r)%64)) == 0 {
+		if r < 0 || r >= 128 || identifierTrailingBits[uint64(r)/64]&(1<<(uint64(r)%64)) == 0 {
 			lexer.back()
 			break
 		}

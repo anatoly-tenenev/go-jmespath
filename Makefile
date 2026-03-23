@@ -1,7 +1,9 @@
 
 CMD = jpgo
 
-SRC_PKGS=./ ./cmd/... ./fuzz/...
+SRC_PKGS=./ ./cmd/...
+
+.PHONY: help generate build test check htmlc fuzz bench pprof-cpu install-dev-cmds
 
 help:
 	@echo "Please use \`make <target>' where <target> is one of"
@@ -30,11 +32,11 @@ check:
 htmlc:
 	go test -coverprofile="/tmp/jpcov"  && go tool cover -html="/tmp/jpcov" && unlink /tmp/jpcov
 
-buildfuzz:
-	go-fuzz-build github.com/jmespath/go-jmespath/fuzz
+FUZZ_TARGET ?= FuzzParser
+FUZZ_TIME ?= 30s
 
-fuzz: buildfuzz
-	go-fuzz -bin=./jmespath-fuzz.zip -workdir=fuzz/testdata
+fuzz:
+	go test -run=^$$ -fuzz=$(FUZZ_TARGET) -fuzztime=$(FUZZ_TIME) ./
 
 bench:
 	go test -bench . -cpuprofile cpu.out
@@ -45,4 +47,4 @@ pprof-cpu:
 install-dev-cmds:
 	go install golang.org/x/lint/golint@latest
 	go install golang.org/x/tools/cmd/stringer@latest
-	command -v golangci-lint || { curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $$(go env GOPATH)/bin v1.46.2; }
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.8.0

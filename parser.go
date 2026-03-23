@@ -184,17 +184,18 @@ func (p *Parser) parseSliceExpression() (ASTNode, error) {
 	index := 0
 	current := p.current()
 	for current != tRbracket && index < 3 {
-		if current == tColon {
+		switch current {
+		case tColon:
 			index++
 			p.advance()
-		} else if current == tNumber {
+		case tNumber:
 			parsedInt, err := strconv.Atoi(p.lookaheadToken(0).value)
 			if err != nil {
 				return ASTNode{}, err
 			}
 			parts[index] = &parsedInt
 			p.advance()
-		} else {
+		default:
 			return ASTNode{}, p.syntaxError(
 				"Expected tColon or tNumber" + ", received: " + p.current().String())
 		}

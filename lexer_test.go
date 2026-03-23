@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/jmespath/go-jmespath/internal/testify/assert"
+	"github.com/stretchr/testify/assert"
 )
 
 var lexingTests = []struct {
@@ -105,6 +105,14 @@ func TestLexingErrors(t *testing.T) {
 		_, err := lexer.tokenize(tt.expression)
 		assert.NotNil(err, fmt.Sprintf("Expected lexing error: %s", tt.msg))
 	}
+}
+
+func TestLexingWithHighBitByteDoesNotPanic(t *testing.T) {
+	assert := assert.New(t)
+	lexer := NewLexer()
+	assert.NotPanics(func() {
+		_, _ = lexer.tokenize(string([]byte{'A', 0x80}))
+	})
 }
 
 var exprIdentifier = "abcdefghijklmnopqrstuvwxyz"

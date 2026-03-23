@@ -380,7 +380,7 @@ func (a *argSpec) typeCheck(arg interface{}) error {
 			}
 		}
 	}
-	return fmt.Errorf("Invalid type for: %v, expected: %#v", arg, a.types)
+	return fmt.Errorf("invalid type for: %v, expected: %#v", arg, a.types)
 }
 
 func (f *functionCaller) CallFunction(name string, arguments []interface{}, intr *treeInterpreter) (interface{}, error) {

@@ -3,12 +3,11 @@ package jmespath
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/jmespath/go-jmespath/internal/testify/assert"
+	"github.com/stretchr/testify/assert"
 )
 
 type TestSuite struct {
@@ -71,7 +70,7 @@ func TestCompliance(t *testing.T) {
 
 func runComplianceTest(assert *assert.Assertions, filename string) {
 	var testSuites []TestSuite
-	data, err := ioutil.ReadFile(filename)
+	data, err := os.ReadFile(filename)
 	if assert.Nil(err) {
 		err := json.Unmarshal(data, &testSuites)
 		if assert.Nil(err) {
