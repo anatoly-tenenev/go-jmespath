@@ -1,6 +1,9 @@
 package jmespath
 
-import "fmt"
+import (
+	"fmt"
+	"reflect"
+)
 
 var unsupportedSchemaKeywords = map[string]struct{}{
 	"$ref":                  {},
@@ -44,6 +47,35 @@ func compileSchemaNode(raw map[string]interface{}, path string) (*schemaNode, er
 		return nil, err
 	}
 
+	constValue, hasConst, err := compileConstValue(raw, path)
+	if err != nil {
+		return nil, err
+	}
+
+	enumValues, hasEnum, err := compileEnumValues(raw, path)
+	if err != nil {
+		return nil, err
+	}
+
+	hasConstraint := hasConst || hasEnum
+	var constraintKind schemaKind
+	if hasConst {
+		constraintKind = constValue.toSchemaKind()
+	}
+	if hasEnum {
+		enumKind, ok := enumValues.kind()
+		if !ok {
+			return nil, unsupportedSchemaError(path, "enum must have at least one value")
+		}
+		if hasConst && constValue.kind != enumKind {
+			return nil, unsupportedSchemaError(path, "const and enum must have matching scalar types")
+		}
+		if hasConst && !enumValues.contains(*constValue) {
+			return nil, unsupportedSchemaError(path, "const value must be present in enum")
+		}
+		constraintKind = scalarLiteral{kind: enumKind}.toSchemaKind()
+	}
+
 	rawProperties, hasProperties := raw["properties"]
 	properties, err := compileProperties(rawProperties, path)
 	if err != nil {
@@ -81,12 +113,31 @@ func compileSchemaNode(raw map[string]interface{}, path string) (*schemaNode, er
 			kind = schemaKindObject
 		case hasItems:
 			kind = schemaKindArray
+		case hasConstraint:
+			kind = constraintKind
 		default:
 			return nil, unsupportedSchemaError(path, "missing supported type")
 		}
 	}
 
-	node := &schemaNode{kind: kind}
+	if hasConstraint {
+		switch kind {
+		case schemaKindObject, schemaKindArray:
+			return nil, unsupportedSchemaError(path, "const/enum for object or array is not supported")
+		case schemaKindString, schemaKindNumber, schemaKindBoolean, schemaKindNull:
+			if kind != constraintKind {
+				return nil, unsupportedSchemaError(path, "schema type does not match const/enum values")
+			}
+		default:
+			return nil, unsupportedSchemaError(path, "unsupported scalar type for const/enum")
+		}
+	}
+
+	node := &schemaNode{
+		kind:       kind,
+		constValue: constValue,
+		enumValues: enumValues,
+	}
 	if kind == schemaKindObject {
 		node.properties = properties
 		node.required = required
@@ -216,6 +267,69 @@ func parseSchemaKind(raw interface{}, path string) (schemaKind, bool, error) {
 	default:
 		return 0, true, unsupportedSchemaError(path, "type must be a string")
 	}
+}
+
+func compileConstValue(raw map[string]interface{}, path string) (*scalarLiteral, bool, error) {
+	constRaw, hasConst := raw["const"]
+	if !hasConst {
+		return nil, false, nil
+	}
+	value, ok := scalarLiteralFromInterface(constRaw)
+	if !ok {
+		return nil, true, unsupportedSchemaError(path, "const must be scalar (string, number, boolean, null)")
+	}
+	return &value, true, nil
+}
+
+func compileEnumValues(raw map[string]interface{}, path string) (*scalarLiteralSet, bool, error) {
+	enumRaw, hasEnum := raw["enum"]
+	if !hasEnum {
+		return nil, false, nil
+	}
+	values, ok := asInterfaceSlice(enumRaw)
+	if !ok {
+		return nil, true, unsupportedSchemaError(path, "enum must be an array")
+	}
+	if len(values) == 0 {
+		return nil, true, unsupportedSchemaError(path, "enum must not be empty")
+	}
+	enumValues := make([]scalarLiteral, 0, len(values))
+	var enumKind scalarLiteralKind
+	for i, rawValue := range values {
+		switch rawValue.(type) {
+		case []interface{}:
+			return nil, true, unsupportedSchemaError(path, "enum of arrays is not supported")
+		case map[string]interface{}, JSONSchema:
+			return nil, true, unsupportedSchemaError(path, "enum of objects is not supported")
+		}
+		parsed, ok := scalarLiteralFromInterface(rawValue)
+		if !ok {
+			return nil, true, unsupportedSchemaError(path, "enum values must be scalar (string, number, boolean, null)")
+		}
+		if i == 0 {
+			enumKind = parsed.kind
+		} else if parsed.kind != enumKind {
+			return nil, true, unsupportedSchemaError(path, "mixed-type enum is not supported")
+		}
+		enumValues = append(enumValues, parsed)
+	}
+	return scalarLiteralSetFromValues(enumValues), true, nil
+}
+
+func asInterfaceSlice(raw interface{}) ([]interface{}, bool) {
+	switch value := raw.(type) {
+	case []interface{}:
+		return value, true
+	}
+	sliceValue := reflect.ValueOf(raw)
+	if !sliceValue.IsValid() || sliceValue.Kind() != reflect.Slice {
+		return nil, false
+	}
+	values := make([]interface{}, sliceValue.Len())
+	for i := 0; i < sliceValue.Len(); i++ {
+		values[i] = sliceValue.Index(i).Interface()
+	}
+	return values, true
 }
 
 func asSchemaMap(raw interface{}) (map[string]interface{}, bool) {

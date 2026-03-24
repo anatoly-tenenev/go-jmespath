@@ -16,9 +16,11 @@ const (
 const staticMaskAny = staticMaskObject | staticMaskArray | staticMaskString | staticMaskNumber | staticMaskBoolean | staticMaskNull
 
 type staticType struct {
-	mask   staticTypeMask
-	object *staticObjectType
-	array  *staticArrayType
+	mask       staticTypeMask
+	object     *staticObjectType
+	array      *staticArrayType
+	constValue *scalarLiteral
+	enumValues *scalarLiteralSet
 }
 
 type staticObjectType struct {
@@ -55,6 +57,8 @@ func staticFromSchemaNode(node *schemaNode, cache map[*schemaNode]*staticType) *
 	}
 	current := &staticType{mask: schemaKindMask(node.kind)}
 	cache[node] = current
+	current.constValue = node.constValue
+	current.enumValues = node.enumValues
 	switch node.kind {
 	case schemaKindObject:
 		obj := &staticObjectType{
@@ -366,6 +370,9 @@ func (a *schemaAnalyzer) analyzeComparator(node ASTNode, input *staticType) (*st
 	}
 	op, _ := node.value.(tokType)
 	if op == tEQ || op == tNE {
+		if err := a.validateComparatorLiteralMembership(node.children[0], node.children[1], left, right); err != nil {
+			return nil, err
+		}
 		return staticBooleanTypeValue, nil
 	}
 	left = normalizeStaticType(left)
@@ -377,6 +384,113 @@ func (a *schemaAnalyzer) analyzeComparator(node ASTNode, input *staticType) (*st
 		return nil, a.errorAt(node, staticErrUnverifiableType, "cannot prove comparator operands are numbers")
 	}
 	return staticBooleanTypeValue, nil
+}
+
+func (a *schemaAnalyzer) validateComparatorLiteralMembership(leftNode, rightNode ASTNode, leftType, rightType *staticType) error {
+	if leftNode.nodeType == ASTLiteral {
+		if err := a.validateLiteralAgainstConstraint(leftNode, rightNode, rightType, false); err != nil {
+			return err
+		}
+	}
+	if rightNode.nodeType == ASTLiteral {
+		if err := a.validateLiteralAgainstConstraint(rightNode, leftNode, leftType, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *schemaAnalyzer) validateContainsLiteralMembership(node ASTNode, argTypes []*staticType) error {
+	if len(node.children) != 2 || len(argTypes) != 2 {
+		return nil
+	}
+	literalNode := node.children[1]
+	if literalNode.nodeType != ASTLiteral {
+		return nil
+	}
+	arrayType := normalizeStaticType(argTypes[0])
+	if !arrayType.isDefinite(staticMaskArray) || arrayType.array == nil {
+		return nil
+	}
+	return a.validateLiteralAgainstConstraint(literalNode, node.children[0], arrayType.array.itemType(), true)
+}
+
+func (a *schemaAnalyzer) validateLiteralAgainstConstraint(literalNode, constrainedNode ASTNode, constrainedType *staticType, arrayItems bool) error {
+	keyword, constrained := constrainedType.scalarConstraintKeyword()
+	if !constrained {
+		return nil
+	}
+	literalValue, ok := scalarLiteralFromInterface(literalNode.value)
+	if ok && constrainedType.allowsScalarLiteral(literalValue) {
+		return nil
+	}
+	literalText := formatLiteralForMessage(literalNode.value)
+	path, hasPath := schemaFieldPath(constrainedNode)
+	if arrayItems {
+		if hasPath && path != "@" {
+			return a.errorAt(literalNode, staticErrInvalidEnumValue, fmt.Sprintf("literal %s is not allowed by %s of array items in %s", literalText, keyword, path))
+		}
+		return a.errorAt(literalNode, staticErrInvalidEnumValue, fmt.Sprintf("literal %s is not allowed by %s of array items", literalText, keyword))
+	}
+	if hasPath && path != "@" {
+		return a.errorAt(literalNode, staticErrInvalidEnumValue, fmt.Sprintf("literal %s is not allowed by %s of field %s", literalText, keyword, path))
+	}
+	return a.errorAt(literalNode, staticErrInvalidEnumValue, fmt.Sprintf("literal %s is not allowed by %s constraint", literalText, keyword))
+}
+
+func schemaFieldPath(node ASTNode) (string, bool) {
+	switch node.nodeType {
+	case ASTField:
+		name, ok := node.value.(string)
+		if !ok || name == "" {
+			return "", false
+		}
+		return name, true
+	case ASTSubexpression, ASTPipe:
+		if len(node.children) != 2 {
+			return "", false
+		}
+		leftPath, ok := schemaFieldPath(node.children[0])
+		if !ok {
+			return "", false
+		}
+		rightPath, ok := schemaFieldPath(node.children[1])
+		if !ok {
+			return "", false
+		}
+		if leftPath == "@" {
+			return rightPath, true
+		}
+		if rightPath == "@" {
+			return leftPath, true
+		}
+		return leftPath + "." + rightPath, true
+	case ASTIndexExpression:
+		if len(node.children) != 2 {
+			return "", false
+		}
+		basePath, ok := schemaFieldPath(node.children[0])
+		if !ok {
+			return "", false
+		}
+		indexNode := node.children[1]
+		switch indexNode.nodeType {
+		case ASTIndex:
+			index, ok := indexNode.value.(int)
+			if !ok {
+				return "", false
+			}
+			return fmt.Sprintf("%s[%d]", basePath, index), true
+		case ASTSlice:
+			return basePath + "[]", true
+		default:
+			return "", false
+		}
+	case ASTIdentity, ASTCurrentNode:
+		return "@", true
+	default:
+		return "", false
+	}
 }
 
 func (a *schemaAnalyzer) analyzeFunction(node ASTNode, input *staticType) (*staticType, error) {
@@ -403,6 +517,11 @@ func (a *schemaAnalyzer) analyzeFunction(node ASTNode, input *staticType) (*stat
 			argTypes[i] = argType
 			spec := functionArgSpecForIndex(entry.arguments, i)
 			if err := a.validateFunctionArg(name, i, argNode, argType, spec); err != nil {
+				return nil, err
+			}
+		}
+		if name == "contains" {
+			if err := a.validateContainsLiteralMembership(node, argTypes); err != nil {
 				return nil, err
 			}
 		}

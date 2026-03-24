@@ -29,6 +29,8 @@ type schemaNode struct {
 	items                      *schemaNode
 	additionalPropertiesMode   additionalPropertiesMode
 	additionalPropertiesSchema *schemaNode
+	constValue                 *scalarLiteral
+	enumValues                 *scalarLiteralSet
 }
 
 // CompiledSchema is an internal IR used by CompileWithCompiledSchema.

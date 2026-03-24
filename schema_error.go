@@ -14,6 +14,7 @@ const (
 	staticErrInvalidFuncArity     = "invalid_function_arity"
 	staticErrInvalidFuncArgType   = "invalid_function_arg_type"
 	staticErrUnverifiableType     = "unverifiable_type"
+	staticErrInvalidEnumValue     = "invalid_enum_value"
 )
 
 // StaticError reports compile-time schema-aware validation failures.
