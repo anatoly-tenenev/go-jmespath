@@ -32,6 +32,42 @@ func MustCompile(expression string) *JMESPath {
 	return jmespath
 }
 
+// CompileWithSchema parses and statically validates a JMESPath expression
+// against the provided JSON schema.
+func CompileWithSchema(expression string, schema JSONSchema) (*JMESPath, error) {
+	cs, err := CompileSchema(schema)
+	if err != nil {
+		return nil, err
+	}
+	return CompileWithCompiledSchema(expression, cs)
+}
+
+// MustCompileWithSchema is like CompileWithSchema but panics on error.
+func MustCompileWithSchema(expression string, schema JSONSchema) *JMESPath {
+	jmespath, err := CompileWithSchema(expression, schema)
+	if err != nil {
+		panic(`jmespath: CompileWithSchema(` + strconv.Quote(expression) + `): ` + err.Error())
+	}
+	return jmespath
+}
+
+// CompileWithCompiledSchema parses and statically validates a JMESPath
+// expression against a precompiled schema.
+func CompileWithCompiledSchema(expression string, cs *CompiledSchema) (*JMESPath, error) {
+	if cs == nil || cs.root == nil {
+		return nil, unsupportedSchemaError("$", "compiled schema is nil")
+	}
+	parser := NewParser()
+	ast, err := parser.Parse(expression)
+	if err != nil {
+		return nil, err
+	}
+	if err := analyzeExpressionAgainstSchema(expression, ast, cs); err != nil {
+		return nil, err
+	}
+	return &JMESPath{ast: ast, intr: newInterpreter()}, nil
+}
+
 // Search evaluates a JMESPath expression against input data and returns the result.
 func (jp *JMESPath) Search(data interface{}) (interface{}, error) {
 	return jp.intr.Execute(jp.ast, data)

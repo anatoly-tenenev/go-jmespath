@@ -73,6 +73,42 @@ you are going to run multiple searches with it:
 	result = "bar"
 ```
 
+## Schema-aware Compile
+
+For user-provided expressions you can validate paths and types at compile-time:
+
+```go
+schema := jmespath.JSONSchema{
+	"type": "object",
+	"properties": map[string]interface{}{
+		"items": map[string]interface{}{
+			"type": "array",
+			"items": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"price": map[string]interface{}{"type": "number"},
+				},
+				"additionalProperties": false,
+			},
+		},
+	},
+	"additionalProperties": false,
+}
+
+// Fast path for many expressions against one schema:
+cs, err := jmespath.CompileSchema(schema)
+if err != nil {
+	// handle unsupported schema
+}
+
+jp, err := jmespath.CompileWithCompiledSchema("items[].price", cs)
+if err != nil {
+	// err can be *jmespath.StaticError with Code/Offset
+}
+```
+
+`CompileWithSchema` is a convenience wrapper over `CompileSchema + CompileWithCompiledSchema`.
+
 ## More Resources
 
 The example above only show a small amount of what

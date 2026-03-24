@@ -92,6 +92,25 @@ func TestPrettyPrintedCompNode(t *testing.T) {
 	assert.Equal(parsed.PrettyPrint(0), prettyPrintedCompNode)
 }
 
+func TestASTOffsets(t *testing.T) {
+	assert := assert.New(t)
+	parser := NewParser()
+
+	parsed, err := parser.Parse("foo[2]")
+	assert.NoError(err)
+	assert.Equal(3, parsed.offset)
+	assert.Equal(ASTIndexExpression, parsed.nodeType)
+	assert.Equal(4, parsed.children[1].offset)
+	assert.Equal(ASTIndex, parsed.children[1].nodeType)
+
+	parsed, err = parser.Parse("foo.bar")
+	assert.NoError(err)
+	assert.Equal(ASTSubexpression, parsed.nodeType)
+	assert.Equal(3, parsed.offset)
+	assert.Equal(4, parsed.children[1].offset)
+	assert.Equal(ASTField, parsed.children[1].nodeType)
+}
+
 func BenchmarkParseIdentifier(b *testing.B) {
 	runParseBenchmark(b, exprIdentifier)
 }
