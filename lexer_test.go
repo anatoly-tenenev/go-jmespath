@@ -107,11 +107,13 @@ func TestLexingErrors(t *testing.T) {
 	}
 }
 
-func TestLexingWithHighBitByteDoesNotPanic(t *testing.T) {
+func TestLexingWithRune128AfterIdentifierDoesNotPanic(t *testing.T) {
 	assert := assert.New(t)
 	lexer := NewLexer()
+
 	assert.NotPanics(func() {
-		_, _ = lexer.tokenize(string([]byte{'A', 0x80}))
+		_, err := lexer.tokenize(string([]rune{'A', 0x80}))
+		assert.Error(err)
 	})
 }
 
