@@ -57,3 +57,66 @@ func BenchmarkCompileWithSchema_ReparsePenalty(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkInferTypeWithCompiledSchema_Scalar(b *testing.B) {
+	schema := compileTestSchema()
+	cs, err := CompileSchema(schema)
+	if err != nil {
+		b.Fatalf("CompileSchema failed: %v", err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := InferTypeWithCompiledSchema("length(name)", cs)
+		if err != nil {
+			b.Fatalf("InferTypeWithCompiledSchema failed: %v", err)
+		}
+	}
+}
+
+func BenchmarkInferTypeWithCompiledSchema_ProjectionFunction(b *testing.B) {
+	schema := compileTestSchema()
+	cs, err := CompileSchema(schema)
+	if err != nil {
+		b.Fatalf("CompileSchema failed: %v", err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := InferTypeWithCompiledSchema("sort_by(items, &price)[].price", cs)
+		if err != nil {
+			b.Fatalf("InferTypeWithCompiledSchema failed: %v", err)
+		}
+	}
+}
+
+func BenchmarkInferTypeWithCompiledSchema_vs_CompileWithCompiledSchema(b *testing.B) {
+	schema := compileTestSchema()
+	cs, err := CompileSchema(schema)
+	if err != nil {
+		b.Fatalf("CompileSchema failed: %v", err)
+	}
+	expression := "items[].price"
+
+	b.Run("InferTypeWithCompiledSchema", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_, err := InferTypeWithCompiledSchema(expression, cs)
+			if err != nil {
+				b.Fatalf("InferTypeWithCompiledSchema failed: %v", err)
+			}
+		}
+	})
+
+	b.Run("CompileWithCompiledSchema", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_, err := CompileWithCompiledSchema(expression, cs)
+			if err != nil {
+				b.Fatalf("CompileWithCompiledSchema failed: %v", err)
+			}
+		}
+	})
+}

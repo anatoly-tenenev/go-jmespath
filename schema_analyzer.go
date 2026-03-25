@@ -106,17 +106,20 @@ type schemaAnalyzer struct {
 	expression string
 }
 
-func analyzeExpressionAgainstSchema(expression string, ast ASTNode, cs *CompiledSchema) error {
+func analyzeExpressionAgainstSchema(expression string, ast ASTNode, cs *CompiledSchema) (*staticType, error) {
 	if cs == nil || cs.root == nil {
-		return unsupportedSchemaError("$", "compiled schema is nil")
+		return nil, unsupportedSchemaError("$", "compiled schema is nil")
 	}
 	rootType := cs.staticRoot
 	if rootType == nil {
 		rootType = staticFromSchema(cs.root)
 	}
 	analyzer := &schemaAnalyzer{expression: expression}
-	_, err := analyzer.analyze(ast, rootType)
-	return err
+	result, err := analyzer.analyze(ast, rootType)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeStaticType(result), nil
 }
 
 func (a *schemaAnalyzer) analyze(node ASTNode, input *staticType) (*staticType, error) {

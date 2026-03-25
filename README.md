@@ -107,9 +107,20 @@ jp, err := jmespath.CompileWithCompiledSchema("items[].price", cs)
 if err != nil {
 	// err can be *jmespath.StaticError with Code/Offset
 }
+
+// Static type inference without runtime data:
+inferred, err := jmespath.InferTypeWithCompiledSchema("items[].price", cs)
+if err != nil {
+	// err can be *jmespath.StaticError with Code/Offset
+}
+// inferred.Mask == jmespath.TypeArray
+// inferred.Item.Mask == jmespath.TypeNumber
 ```
 
 `CompileWithSchema` is a convenience wrapper over `CompileSchema + CompileWithCompiledSchema`.
+
+`InferTypeWithSchema` is a convenience wrapper over `CompileSchema + InferTypeWithCompiledSchema`.
+For high-throughput usage, prefer `InferTypeWithCompiledSchema` to avoid recompiling schema.
 
 `CompileSchema` validates the supported subset strictly: unknown schema keywords fail with `unsupported_schema`, while metadata fields `title`, `description`, `default`, and `examples` are ignored.
 

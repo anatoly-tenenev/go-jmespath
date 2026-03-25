@@ -62,10 +62,39 @@ func CompileWithCompiledSchema(expression string, cs *CompiledSchema) (*JMESPath
 	if err != nil {
 		return nil, err
 	}
-	if err := analyzeExpressionAgainstSchema(expression, ast, cs); err != nil {
+	if _, err := analyzeExpressionAgainstSchema(expression, ast, cs); err != nil {
 		return nil, err
 	}
 	return &JMESPath{ast: ast, intr: newInterpreter()}, nil
+}
+
+// InferTypeWithSchema parses and statically validates a JMESPath expression
+// against the provided schema and returns the inferred result type.
+func InferTypeWithSchema(expression string, schema JSONSchema) (*InferredType, error) {
+	cs, err := CompileSchema(schema)
+	if err != nil {
+		return nil, err
+	}
+	return InferTypeWithCompiledSchema(expression, cs)
+}
+
+// InferTypeWithCompiledSchema parses and statically validates a JMESPath
+// expression against a precompiled schema and returns the inferred result type.
+// This is the preferred fast path for repeated queries against the same schema.
+func InferTypeWithCompiledSchema(expression string, cs *CompiledSchema) (*InferredType, error) {
+	if cs == nil || cs.root == nil {
+		return nil, unsupportedSchemaError("$", "compiled schema is nil")
+	}
+	parser := NewParser()
+	ast, err := parser.Parse(expression)
+	if err != nil {
+		return nil, err
+	}
+	inferredStaticType, err := analyzeExpressionAgainstSchema(expression, ast, cs)
+	if err != nil {
+		return nil, err
+	}
+	return inferredTypeFromStatic(inferredStaticType), nil
 }
 
 // Search evaluates a JMESPath expression against input data and returns the result.
