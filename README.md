@@ -75,7 +75,9 @@ you are going to run multiple searches with it:
 
 ## Schema-aware Compile
 
-For user-provided expressions you can validate paths and types at compile-time:
+For user-provided expressions you can validate paths and types at compile-time.
+In schema-aware mode (`CompileWithSchema` / `CompileWithCompiledSchema`) this includes
+function validation (unknown function names, arity, and argument types):
 
 ```go
 schema := jmespath.JSONSchema{
