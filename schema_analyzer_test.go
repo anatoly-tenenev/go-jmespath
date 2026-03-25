@@ -56,6 +56,19 @@ func TestCompileWithSchemaErrors(t *testing.T) {
 func TestCompileWithSchemaAdditionalPropertiesModes(t *testing.T) {
 	assert := assert.New(t)
 
+	defaultOpenSchema := JSONSchema{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"known": map[string]interface{}{"type": "string"},
+		},
+	}
+	_, err := CompileWithSchema("unknown", defaultOpenSchema)
+	assert.Error(err)
+	var staticErr *StaticError
+	assert.ErrorAs(err, &staticErr)
+	assert.Equal(staticErrUnverifiableProperty, staticErr.Code)
+	assert.Equal(0, staticErr.Offset)
+
 	openSchema := JSONSchema{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -63,9 +76,8 @@ func TestCompileWithSchemaAdditionalPropertiesModes(t *testing.T) {
 		},
 		"additionalProperties": true,
 	}
-	_, err := CompileWithSchema("unknown", openSchema)
+	_, err = CompileWithSchema("unknown", openSchema)
 	assert.Error(err)
-	var staticErr *StaticError
 	assert.ErrorAs(err, &staticErr)
 	assert.Equal(staticErrUnverifiableProperty, staticErr.Code)
 	assert.Equal(0, staticErr.Offset)

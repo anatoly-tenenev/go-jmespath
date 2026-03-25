@@ -78,3 +78,24 @@ func TestCompileSchemaTypeArrayIsUnsupported(t *testing.T) {
 	assert.ErrorAs(err, &staticErr)
 	assert.Equal(staticErrUnsupportedSchema, staticErr.Code)
 }
+
+func TestCompileSchemaDefaultsAdditionalPropertiesToOpen(t *testing.T) {
+	assert := assert.New(t)
+	schema := JSONSchema{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"known": map[string]interface{}{"type": "string"},
+		},
+	}
+
+	compiled, err := CompileSchema(schema)
+	assert.NoError(err)
+	assert.NotNil(compiled)
+	assert.NotNil(compiled.root)
+	assert.Equal(additionalPropertiesAllowOpen, compiled.root.additionalPropertiesMode)
+	assert.Nil(compiled.root.additionalPropertiesSchema)
+	assert.NotNil(compiled.staticRoot)
+	assert.NotNil(compiled.staticRoot.object)
+	assert.Equal(additionalPropertiesAllowOpen, compiled.staticRoot.object.additionalMode)
+	assert.Nil(compiled.staticRoot.object.additionalSchema)
+}
