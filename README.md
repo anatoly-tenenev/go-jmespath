@@ -109,6 +109,8 @@ if err != nil {
 
 `CompileWithSchema` is a convenience wrapper over `CompileSchema + CompileWithCompiledSchema`.
 
+`CompileSchema` validates the supported subset strictly: unknown schema keywords fail with `unsupported_schema`, while metadata fields `title`, `description`, `default`, and `examples` are ignored.
+
 ## More Resources
 
 The example above only show a small amount of what

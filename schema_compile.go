@@ -5,6 +5,23 @@ import (
 	"reflect"
 )
 
+var supportedSchemaKeywords = map[string]struct{}{
+	"type":                 {},
+	"properties":           {},
+	"required":             {},
+	"items":                {},
+	"additionalProperties": {},
+	"const":                {},
+	"enum":                 {},
+}
+
+var ignoredSchemaMetadataKeywords = map[string]struct{}{
+	"title":       {},
+	"description": {},
+	"default":     {},
+	"examples":    {},
+}
+
 var unsupportedSchemaKeywords = map[string]struct{}{
 	"$ref":                  {},
 	"oneOf":                 {},
@@ -36,10 +53,8 @@ func compileSchemaNode(raw map[string]interface{}, path string) (*schemaNode, er
 	if raw == nil {
 		return nil, unsupportedSchemaError(path, "schema must be an object")
 	}
-	for key := range raw {
-		if _, exists := unsupportedSchemaKeywords[key]; exists {
-			return nil, unsupportedSchemaError(path, fmt.Sprintf("keyword %q is not supported", key))
-		}
+	if err := validateSchemaKeywords(raw, path); err != nil {
+		return nil, err
 	}
 
 	kind, hasType, err := parseSchemaKind(raw["type"], path)
@@ -148,6 +163,22 @@ func compileSchemaNode(raw map[string]interface{}, path string) (*schemaNode, er
 		node.items = items
 	}
 	return node, nil
+}
+
+func validateSchemaKeywords(raw map[string]interface{}, path string) error {
+	for key := range raw {
+		if _, ok := supportedSchemaKeywords[key]; ok {
+			continue
+		}
+		if _, ok := ignoredSchemaMetadataKeywords[key]; ok {
+			continue
+		}
+		if _, exists := unsupportedSchemaKeywords[key]; exists {
+			return unsupportedSchemaError(path, fmt.Sprintf("keyword %q is not supported", key))
+		}
+		return unsupportedSchemaError(path, fmt.Sprintf("unknown schema keyword %q", key))
+	}
+	return nil
 }
 
 func compileProperties(raw interface{}, path string) (map[string]*schemaNode, error) {
