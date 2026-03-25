@@ -26,6 +26,83 @@ type InferredType struct {
 	Enum       []interface{}
 }
 
+// IsBoolean reports whether the inferred type is exactly boolean.
+func (t *InferredType) IsBoolean() bool {
+	return t.isExactly(TypeBoolean)
+}
+
+// IsNumber reports whether the inferred type is exactly number.
+func (t *InferredType) IsNumber() bool {
+	return t.isExactly(TypeNumber)
+}
+
+// IsString reports whether the inferred type is exactly string.
+func (t *InferredType) IsString() bool {
+	return t.isExactly(TypeString)
+}
+
+// IsNull reports whether the inferred type is exactly null.
+func (t *InferredType) IsNull() bool {
+	return t.isExactly(TypeNull)
+}
+
+// IsArray reports whether the inferred type is exactly array.
+func (t *InferredType) IsArray() bool {
+	return t.isExactly(TypeArray)
+}
+
+// IsObject reports whether the inferred type is exactly object.
+func (t *InferredType) IsObject() bool {
+	return t.isExactly(TypeObject)
+}
+
+// MayBeBoolean reports whether boolean is one of the possible inferred types.
+func (t *InferredType) MayBeBoolean() bool {
+	return t.mayContain(TypeBoolean)
+}
+
+// MayBeNumber reports whether number is one of the possible inferred types.
+func (t *InferredType) MayBeNumber() bool {
+	return t.mayContain(TypeNumber)
+}
+
+// MayBeString reports whether string is one of the possible inferred types.
+func (t *InferredType) MayBeString() bool {
+	return t.mayContain(TypeString)
+}
+
+// MayBeNull reports whether null is one of the possible inferred types.
+func (t *InferredType) MayBeNull() bool {
+	return t.mayContain(TypeNull)
+}
+
+// MayBeArray reports whether array is one of the possible inferred types.
+func (t *InferredType) MayBeArray() bool {
+	return t.mayContain(TypeArray)
+}
+
+// MayBeObject reports whether object is one of the possible inferred types.
+func (t *InferredType) MayBeObject() bool {
+	return t.mayContain(TypeObject)
+}
+
+// IsUnion reports whether the inferred type may be more than one kind.
+func (t *InferredType) IsUnion() bool {
+	if t == nil {
+		return false
+	}
+	mask := t.Mask
+	return mask != 0 && mask&(mask-1) != 0
+}
+
+func (t *InferredType) isExactly(mask TypeMask) bool {
+	return t != nil && t.Mask == mask
+}
+
+func (t *InferredType) mayContain(mask TypeMask) bool {
+	return t != nil && t.Mask&mask != 0
+}
+
 type staticToInferredConverter struct {
 	cache map[*staticType]*InferredType
 }

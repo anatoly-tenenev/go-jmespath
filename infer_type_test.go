@@ -258,6 +258,158 @@ func TestInferTypeWithCompiledSchemaNil(t *testing.T) {
 	a.Equal(staticErrUnsupportedSchema, staticErr.Code)
 }
 
+func TestInferredTypeIsXStrictChecks(t *testing.T) {
+	tests := []struct {
+		name      string
+		typ       *InferredType
+		isBoolean bool
+		isNumber  bool
+		isString  bool
+		isNull    bool
+		isArray   bool
+		isObject  bool
+	}{
+		{
+			name:      "boolean",
+			typ:       &InferredType{Mask: TypeBoolean},
+			isBoolean: true,
+		},
+		{
+			name:     "number",
+			typ:      &InferredType{Mask: TypeNumber},
+			isNumber: true,
+		},
+		{
+			name:     "string",
+			typ:      &InferredType{Mask: TypeString},
+			isString: true,
+		},
+		{
+			name:   "null",
+			typ:    &InferredType{Mask: TypeNull},
+			isNull: true,
+		},
+		{
+			name:    "array",
+			typ:     &InferredType{Mask: TypeArray},
+			isArray: true,
+		},
+		{
+			name:     "object",
+			typ:      &InferredType{Mask: TypeObject},
+			isObject: true,
+		},
+		{
+			name: "union_string_number",
+			typ:  &InferredType{Mask: TypeString | TypeNumber},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := assert.New(t)
+			a.Equal(tt.isBoolean, tt.typ.IsBoolean())
+			a.Equal(tt.isNumber, tt.typ.IsNumber())
+			a.Equal(tt.isString, tt.typ.IsString())
+			a.Equal(tt.isNull, tt.typ.IsNull())
+			a.Equal(tt.isArray, tt.typ.IsArray())
+			a.Equal(tt.isObject, tt.typ.IsObject())
+		})
+	}
+}
+
+func TestInferredTypeMayBeXChecks(t *testing.T) {
+	tests := []struct {
+		name         string
+		typ          *InferredType
+		mayBeBoolean bool
+		mayBeNumber  bool
+		mayBeString  bool
+		mayBeNull    bool
+		mayBeArray   bool
+		mayBeObject  bool
+	}{
+		{
+			name:         "single_type_boolean",
+			typ:          &InferredType{Mask: TypeBoolean},
+			mayBeBoolean: true,
+		},
+		{
+			name:         "union_boolean_null",
+			typ:          &InferredType{Mask: TypeBoolean | TypeNull},
+			mayBeBoolean: true,
+			mayBeNull:    true,
+		},
+		{
+			name:        "negative_case_for_boolean",
+			typ:         &InferredType{Mask: TypeString | TypeNumber},
+			mayBeNumber: true,
+			mayBeString: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := assert.New(t)
+			a.Equal(tt.mayBeBoolean, tt.typ.MayBeBoolean())
+			a.Equal(tt.mayBeNumber, tt.typ.MayBeNumber())
+			a.Equal(tt.mayBeString, tt.typ.MayBeString())
+			a.Equal(tt.mayBeNull, tt.typ.MayBeNull())
+			a.Equal(tt.mayBeArray, tt.typ.MayBeArray())
+			a.Equal(tt.mayBeObject, tt.typ.MayBeObject())
+		})
+	}
+}
+
+func TestInferredTypeIsUnion(t *testing.T) {
+	tests := []struct {
+		name  string
+		typ   *InferredType
+		union bool
+	}{
+		{
+			name:  "single_type",
+			typ:   &InferredType{Mask: TypeString},
+			union: false,
+		},
+		{
+			name:  "two_types",
+			typ:   &InferredType{Mask: TypeString | TypeNull},
+			union: true,
+		},
+		{
+			name:  "several_types",
+			typ:   &InferredType{Mask: TypeObject | TypeArray | TypeNumber},
+			union: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := assert.New(t)
+			a.Equal(tt.union, tt.typ.IsUnion())
+		})
+	}
+}
+
+func TestInferredTypeNilReceiverMethods(t *testing.T) {
+	var typ *InferredType
+	a := assert.New(t)
+	a.False(typ.IsBoolean())
+	a.False(typ.IsNumber())
+	a.False(typ.IsString())
+	a.False(typ.IsNull())
+	a.False(typ.IsArray())
+	a.False(typ.IsObject())
+	a.False(typ.MayBeBoolean())
+	a.False(typ.MayBeNumber())
+	a.False(typ.MayBeString())
+	a.False(typ.MayBeNull())
+	a.False(typ.MayBeArray())
+	a.False(typ.MayBeObject())
+	a.False(typ.IsUnion())
+}
+
 func inferTypeTestSchema() JSONSchema {
 	return JSONSchema{
 		"type": "object",
