@@ -115,6 +115,28 @@ if err != nil {
 }
 // inferred.Mask == jmespath.TypeArray
 // inferred.Item.Mask == jmespath.TypeNumber
+
+// Guard analysis on compiled expression:
+guarded, err := jmespath.CompileWithCompiledSchema("items && items != `null`", cs)
+if err != nil {
+	// err can be *jmespath.StaticError with Code/Offset
+}
+if guarded.ProtectsWhenTrue("items") {
+	// when expression is true, "items" is guaranteed non-missing/non-null
+}
+paths := guarded.GuardsWhenTrue().ProtectedPaths() // copy of guarded paths
+_ = paths
+
+// Guard analysis is enabled by default. You can disable it explicitly:
+noGuards, err := jmespath.CompileWithCompiledSchemaOptions(
+	"items && items != `null`",
+	cs,
+	&jmespath.SchemaCompileOptions{DisableGuardAnalysis: true},
+)
+if err != nil {
+	// err can be *jmespath.StaticError with Code/Offset
+}
+_ = noGuards
 ```
 
 `CompileWithSchema` is a convenience wrapper over `CompileSchema + CompileWithCompiledSchema`.
