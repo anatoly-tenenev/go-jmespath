@@ -80,8 +80,77 @@ func (a *guardAnalyzer) analyzeWhenTrue(node ASTNode) guardPathSet {
 		return nil
 	case ASTComparator:
 		return guardPathSetFromNullComparator(node)
+	case ASTFunctionExpression:
+		return guardPathSetFromFunctionWhenTrue(node)
 	default:
 		return nil
+	}
+}
+
+func guardPathSetFromFunctionWhenTrue(node ASTNode) guardPathSet {
+	if node.nodeType != ASTFunctionExpression {
+		return nil
+	}
+	name, ok := node.value.(string)
+	if !ok {
+		return nil
+	}
+	if len(node.children) != 2 {
+		return nil
+	}
+
+	switch name {
+	case "starts_with", "ends_with":
+		return unionGuardPathSets(
+			guardPathSetFromPathNode(node.children[0]),
+			guardPathSetFromPathNode(node.children[1]),
+		)
+	case "contains":
+		leftGuards := guardPathSetFromPathNode(node.children[0])
+		if !containsGuardsSecondArgWhenTrue(node.children[0]) {
+			return leftGuards
+		}
+		rightGuards := guardPathSetFromPathNode(node.children[1])
+		return unionGuardPathSets(leftGuards, rightGuards)
+	default:
+		return nil
+	}
+}
+
+func containsGuardsSecondArgWhenTrue(searchArg ASTNode) bool {
+	if isStringLiteralNode(searchArg) {
+		return true
+	}
+	return isLiteralArrayWithoutNull(searchArg)
+}
+
+func isStringLiteralNode(node ASTNode) bool {
+	_, ok := node.value.(string)
+	return node.nodeType == ASTLiteral && ok
+}
+
+func isLiteralArrayWithoutNull(node ASTNode) bool {
+	switch node.nodeType {
+	case ASTLiteral:
+		items, ok := node.value.([]interface{})
+		if !ok {
+			return false
+		}
+		for _, item := range items {
+			if item == nil {
+				return false
+			}
+		}
+		return true
+	case ASTMultiSelectList:
+		for _, child := range node.children {
+			if child.nodeType != ASTLiteral || child.value == nil {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
 	}
 }
 

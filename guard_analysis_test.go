@@ -210,6 +210,88 @@ func TestGuardAnalysisWhenTrue(t *testing.T) {
 			},
 		},
 		{
+			name:       "function_starts_with_guards_first_arg",
+			schema:     guardFlatStringSchema(false),
+			expression: "starts_with(a, 'x')",
+			protected:  []string{"a"},
+			notProtected: []string{
+				"b",
+			},
+		},
+		{
+			name:       "function_starts_with_guards_both_path_args",
+			schema:     guardFlatStringSchema(false),
+			expression: "starts_with(a, b)",
+			protected:  []string{"a", "b"},
+			notProtected: []string{
+				"a.b",
+			},
+		},
+		{
+			name:       "function_ends_with_guards_first_arg",
+			schema:     guardFlatStringSchema(false),
+			expression: "ends_with(a, 'x')",
+			protected:  []string{"a"},
+			notProtected: []string{
+				"b",
+			},
+		},
+		{
+			name:       "function_contains_guards_first_arg",
+			schema:     guardFlatStringSchema(false),
+			expression: "contains(a, 'x')",
+			protected:  []string{"a"},
+			notProtected: []string{
+				"b",
+			},
+		},
+		{
+			name:       "function_contains_string_literal_search_guards_second_arg",
+			schema:     guardFlatStringSchema(false),
+			expression: "contains('abc', a)",
+			protected:  []string{"a"},
+			notProtected: []string{
+				"b",
+			},
+		},
+		{
+			name:       "function_contains_literal_array_guards_second_arg",
+			schema:     guardFlatStringSchema(false),
+			expression: "contains(['a', 'b'], a)",
+			protected:  []string{"a"},
+			notProtected: []string{
+				"b",
+			},
+		},
+		{
+			name:       "function_contains_literal_array_with_null_does_not_guard_second_arg",
+			schema:     guardFlatStringSchema(false),
+			expression: "contains([`null`, 'a'], a)",
+			protected:  nil,
+			notProtected: []string{
+				"a",
+				"b",
+			},
+		},
+		{
+			name:       "function_contains_path_args_guards_only_first_arg",
+			schema:     guardFlatStringSchema(false),
+			expression: "contains(a, b)",
+			protected:  []string{"a"},
+			notProtected: []string{
+				"b",
+			},
+		},
+		{
+			name:       "function_contains_in_and_combines_guards",
+			schema:     guardFlatStringSchema(false),
+			expression: "a && contains(['x'], b)",
+			protected:  []string{"a", "b"},
+			notProtected: []string{
+				"a.b",
+			},
+		},
+		{
 			name:       "function_in_and_keeps_left_guard",
 			schema:     guardFlatSchema(false),
 			expression: "a && abs(a)",
@@ -217,16 +299,6 @@ func TestGuardAnalysisWhenTrue(t *testing.T) {
 				"a",
 			},
 			notProtected: []string{
-				"b",
-			},
-		},
-		{
-			name:       "function_contains_does_not_guard_arg",
-			schema:     guardFlatSchema(false),
-			expression: "contains(['test'], a)",
-			protected:  nil,
-			notProtected: []string{
-				"a",
 				"b",
 			},
 		},
@@ -293,6 +365,17 @@ func guardFlatSchema(open bool) JSONSchema {
 		"properties": map[string]interface{}{
 			"a": map[string]interface{}{"type": "number"},
 			"b": map[string]interface{}{"type": "number"},
+		},
+		"additionalProperties": open,
+	}
+}
+
+func guardFlatStringSchema(open bool) JSONSchema {
+	return JSONSchema{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"a": map[string]interface{}{"type": "string"},
+			"b": map[string]interface{}{"type": "string"},
 		},
 		"additionalProperties": open,
 	}
