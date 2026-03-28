@@ -165,6 +165,106 @@ func TestGuardAnalysisWhenTrue(t *testing.T) {
 			},
 		},
 		{
+			name:       "eq_non_null_literal",
+			schema:     guardFlatStringSchema(false),
+			expression: "a == 'x'",
+			protected:  []string{"a"},
+			notProtected: []string{
+				"b",
+			},
+		},
+		{
+			name:       "eq_non_null_literal_reversed",
+			schema:     guardFlatStringSchema(false),
+			expression: "'x' == a",
+			protected:  []string{"a"},
+			notProtected: []string{
+				"b",
+			},
+		},
+		{
+			name:       "eq_non_null_literal_nested_path_adds_prefixes",
+			schema:     guardNestedSchema(false),
+			expression: "a.b == 'a'",
+			protected:  []string{"a", "a.b"},
+			notProtected: []string{
+				"a.c",
+			},
+		},
+		{
+			name:       "neq_non_null_literal_does_not_guard",
+			schema:     guardFlatStringSchema(false),
+			expression: "a != 'x'",
+			protected:  nil,
+			notProtected: []string{
+				"a",
+			},
+		},
+		{
+			name:       "gt_number_literal_guards_path",
+			schema:     guardFlatSchema(false),
+			expression: "a > `0`",
+			protected:  []string{"a"},
+			notProtected: []string{
+				"b",
+			},
+		},
+		{
+			name:       "lt_number_literal_reversed_guards_path",
+			schema:     guardFlatSchema(false),
+			expression: "`0` < a",
+			protected:  []string{"a"},
+			notProtected: []string{
+				"b",
+			},
+		},
+		{
+			name:       "gte_nested_path_adds_prefixes",
+			schema:     guardNestedNumberSchema(false),
+			expression: "a.b >= `1`",
+			protected:  []string{"a", "a.b"},
+			notProtected: []string{
+				"a.c",
+			},
+		},
+		{
+			name:       "lt_nested_path_adds_prefixes",
+			schema:     guardNestedNumberSchema(false),
+			expression: "a.b < `10`",
+			protected:  []string{"a", "a.b"},
+			notProtected: []string{
+				"a.c",
+			},
+		},
+		{
+			name:       "lte_number_literal_guards_path",
+			schema:     guardFlatSchema(false),
+			expression: "a <= `10`",
+			protected:  []string{"a"},
+			notProtected: []string{
+				"b",
+			},
+		},
+		{
+			name:       "gt_two_paths_guards_both",
+			schema:     guardFlatSchema(false),
+			expression: "a > b",
+			protected:  []string{"a", "b"},
+			notProtected: []string{
+				"a.b",
+			},
+		},
+		{
+			name:       "gte_two_nested_paths_guards_both_prefixes",
+			schema:     guardDualNestedNumberSchema(),
+			expression: "a.b >= c.d",
+			protected:  []string{"a", "a.b", "c", "c.d"},
+			notProtected: []string{
+				"a.c",
+				"c.a",
+			},
+		},
+		{
 			name:       "not_expression",
 			schema:     guardFlatSchema(false),
 			expression: "!a",
@@ -391,6 +491,45 @@ func guardNestedSchema(open bool) JSONSchema {
 					"b": map[string]interface{}{"type": "string"},
 				},
 				"additionalProperties": open,
+			},
+		},
+		"additionalProperties": false,
+	}
+}
+
+func guardNestedNumberSchema(open bool) JSONSchema {
+	return JSONSchema{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"a": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"b": map[string]interface{}{"type": "number"},
+				},
+				"additionalProperties": open,
+			},
+		},
+		"additionalProperties": false,
+	}
+}
+
+func guardDualNestedNumberSchema() JSONSchema {
+	return JSONSchema{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"a": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"b": map[string]interface{}{"type": "number"},
+				},
+				"additionalProperties": false,
+			},
+			"c": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"d": map[string]interface{}{"type": "number"},
+				},
+				"additionalProperties": false,
 			},
 		},
 		"additionalProperties": false,

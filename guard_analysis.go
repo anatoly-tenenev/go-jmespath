@@ -79,7 +79,7 @@ func (a *guardAnalyzer) analyzeWhenTrue(node ASTNode) guardPathSet {
 	case ASTNotExpression:
 		return nil
 	case ASTComparator:
-		return guardPathSetFromNullComparator(node)
+		return guardPathSetFromComparatorWhenTrue(node)
 	case ASTFunctionExpression:
 		return guardPathSetFromFunctionWhenTrue(node)
 	default:
@@ -154,23 +154,42 @@ func isLiteralArrayWithoutNull(node ASTNode) bool {
 	}
 }
 
-func guardPathSetFromNullComparator(node ASTNode) guardPathSet {
+func guardPathSetFromComparatorWhenTrue(node ASTNode) guardPathSet {
 	if len(node.children) != 2 {
 		return nil
 	}
 	operator, ok := node.value.(tokType)
-	if !ok || operator != tNE {
+	if !ok {
 		return nil
 	}
 	left := node.children[0]
 	right := node.children[1]
-	if isNullLiteralNode(left) {
-		return guardPathSetFromPathNode(right)
+
+	switch operator {
+	case tNE:
+		if isNullLiteralNode(left) {
+			return guardPathSetFromPathNode(right)
+		}
+		if isNullLiteralNode(right) {
+			return guardPathSetFromPathNode(left)
+		}
+		return nil
+	case tEQ:
+		if isNonNullLiteralNode(left) {
+			return guardPathSetFromPathNode(right)
+		}
+		if isNonNullLiteralNode(right) {
+			return guardPathSetFromPathNode(left)
+		}
+		return nil
+	case tLT, tLTE, tGT, tGTE:
+		return unionGuardPathSets(
+			guardPathSetFromPathNode(left),
+			guardPathSetFromPathNode(right),
+		)
+	default:
+		return nil
 	}
-	if isNullLiteralNode(right) {
-		return guardPathSetFromPathNode(left)
-	}
-	return nil
 }
 
 func guardPathSetFromPathNode(node ASTNode) guardPathSet {
@@ -271,4 +290,8 @@ func intersectGuardPathSets(left, right guardPathSet) guardPathSet {
 
 func isNullLiteralNode(node ASTNode) bool {
 	return node.nodeType == ASTLiteral && node.value == nil
+}
+
+func isNonNullLiteralNode(node ASTNode) bool {
+	return node.nodeType == ASTLiteral && node.value != nil
 }
