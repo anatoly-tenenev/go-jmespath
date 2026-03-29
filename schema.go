@@ -14,6 +14,13 @@ const (
 	schemaKindNull
 )
 
+type stringFormat uint8
+
+const (
+	stringFormatNone stringFormat = iota
+	stringFormatDate
+)
+
 type additionalPropertiesMode uint8
 
 const (
@@ -31,6 +38,7 @@ type schemaNode struct {
 	additionalPropertiesSchema *schemaNode
 	constValue                 *scalarLiteral
 	enumValues                 *scalarLiteralSet
+	stringFormat               stringFormat
 }
 
 // CompiledSchema is an internal IR used by CompileWithCompiledSchema.

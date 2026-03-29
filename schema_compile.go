@@ -7,6 +7,7 @@ import (
 
 var supportedSchemaKeywords = map[string]struct{}{
 	"type":                 {},
+	"format":               {},
 	"properties":           {},
 	"required":             {},
 	"items":                {},
@@ -58,6 +59,10 @@ func compileSchemaNode(raw map[string]interface{}, path string) (*schemaNode, er
 	}
 
 	kind, hasType, err := parseSchemaKind(raw["type"], path)
+	if err != nil {
+		return nil, err
+	}
+	stringFormat, hasFormat, err := parseSchemaStringFormat(raw["format"], path, hasType, kind)
 	if err != nil {
 		return nil, err
 	}
@@ -147,11 +152,20 @@ func compileSchemaNode(raw map[string]interface{}, path string) (*schemaNode, er
 			return nil, unsupportedSchemaError(path, "unsupported scalar type for const/enum")
 		}
 	}
+	if hasFormat && kind != schemaKindString {
+		return nil, unsupportedSchemaError(path, "format is supported only for type \"string\"")
+	}
+	if stringFormat != stringFormatNone {
+		if err := validateStringFormatConstraints(path, stringFormat, constValue, enumValues); err != nil {
+			return nil, err
+		}
+	}
 
 	node := &schemaNode{
-		kind:       kind,
-		constValue: constValue,
-		enumValues: enumValues,
+		kind:         kind,
+		constValue:   constValue,
+		enumValues:   enumValues,
+		stringFormat: stringFormat,
 	}
 	if kind == schemaKindObject {
 		node.properties = properties
@@ -345,6 +359,43 @@ func compileEnumValues(raw map[string]interface{}, path string) (*scalarLiteralS
 		enumValues = append(enumValues, parsed)
 	}
 	return scalarLiteralSetFromValues(enumValues), true, nil
+}
+
+func validateStringFormatConstraints(path string, format stringFormat, constValue *scalarLiteral, enumValues *scalarLiteralSet) error {
+	if format == stringFormatNone {
+		return nil
+	}
+	if constValue != nil {
+		if err := validateFormattedScalarLiteral(path, format, *constValue); err != nil {
+			return err
+		}
+	}
+	if enumValues != nil {
+		for _, value := range enumValues.values {
+			if err := validateFormattedScalarLiteral(path, format, value); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateFormattedScalarLiteral(path string, format stringFormat, value scalarLiteral) error {
+	if format == stringFormatNone {
+		return nil
+	}
+	if value.kind != scalarLiteralString {
+		return unsupportedSchemaError(path, "format requires string const/enum values")
+	}
+	switch format {
+	case stringFormatDate:
+		if !isValidDateString(value.stringValue) {
+			return unsupportedSchemaError(path, fmt.Sprintf("string value %q is not a valid date", value.stringValue))
+		}
+		return nil
+	default:
+		return unsupportedSchemaError(path, "unsupported string format")
+	}
 }
 
 func asInterfaceSlice(raw interface{}) ([]interface{}, bool) {

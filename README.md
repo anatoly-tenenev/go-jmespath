@@ -77,7 +77,8 @@ you are going to run multiple searches with it:
 
 For user-provided expressions you can validate paths and types at compile-time.
 In schema-aware mode (`CompileWithSchema` / `CompileWithCompiledSchema`) this includes
-function validation (unknown function names, arity, and argument types):
+function validation (unknown function names, arity, and argument types), plus
+date-aware range comparators for `type=string, format=date`:
 
 ```go
 schema := jmespath.JSONSchema{
@@ -88,8 +89,10 @@ schema := jmespath.JSONSchema{
 			"items": map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
-					"price": map[string]interface{}{"type": "number"},
+					"price":       map[string]interface{}{"type": "number"},
+					"createdDate": map[string]interface{}{"type": "string", "format": "date"},
 				},
+				"required": []interface{}{"createdDate"},
 				"additionalProperties": false,
 			},
 		},
@@ -107,6 +110,12 @@ jp, err := jmespath.CompileWithCompiledSchema("items[].price", cs)
 if err != nil {
 	// err can be *jmespath.StaticError with Code/Offset
 }
+
+dateFilter, err := jmespath.CompileWithCompiledSchema("items[?createdDate >= '2026-03-01']", cs)
+if err != nil {
+	// err can be *jmespath.StaticError with Code/Offset
+}
+_ = dateFilter
 
 // Static type inference without runtime data:
 inferred, err := jmespath.InferTypeWithCompiledSchema("items[].price", cs)
@@ -145,6 +154,9 @@ _ = noGuards
 For high-throughput usage, prefer `InferTypeWithCompiledSchema` to avoid recompiling schema.
 
 `CompileSchema` validates the supported subset strictly: unknown schema keywords fail with `unsupported_schema`, while metadata fields `title`, `description`, `default`, and `examples` are ignored.
+
+Supported schema-aware string formats:
+- `type: "string", format: "date"` for range comparators (`>`, `>=`, `<`, `<=`) against other date fields or `YYYY-MM-DD` string literals. Date operands must be schema-required/non-null, or explicitly guarded before comparison.
 
 ## More Resources
 

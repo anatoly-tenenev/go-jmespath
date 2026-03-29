@@ -2,6 +2,7 @@ package jmespath
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"unicode"
 	"unicode/utf8"
@@ -12,12 +13,18 @@ import (
 */
 
 type treeInterpreter struct {
-	fCall *functionCaller
+	fCall           *functionCaller
+	comparatorPlans map[int]comparatorPlan
 }
 
 func newInterpreter() *treeInterpreter {
+	return newInterpreterWithComparatorPlans(nil)
+}
+
+func newInterpreterWithComparatorPlans(comparatorPlans map[int]comparatorPlan) *treeInterpreter {
 	interpreter := treeInterpreter{}
 	interpreter.fCall = newFunctionCaller()
+	interpreter.comparatorPlans = comparatorPlans
 	return &interpreter
 }
 
@@ -45,24 +52,14 @@ func (intr *treeInterpreter) Execute(node ASTNode, value interface{}) (interface
 		case tNE:
 			return !objsEqual(left, right), nil
 		}
-		leftNum, ok := left.(float64)
-		if !ok {
-			return nil, nil
+		plan := intr.comparatorPlan(node)
+		switch plan.kind {
+		case orderedValueKindDate:
+			return intr.compareDates(node.value.(tokType), left, right, plan)
+		case orderedValueKindNumber:
+			return compareNumbers(node.value.(tokType), left, right)
 		}
-		rightNum, ok := right.(float64)
-		if !ok {
-			return nil, nil
-		}
-		switch node.value {
-		case tGT:
-			return leftNum > rightNum, nil
-		case tGTE:
-			return leftNum >= rightNum, nil
-		case tLT:
-			return leftNum < rightNum, nil
-		case tLTE:
-			return leftNum <= rightNum, nil
-		}
+		return compareNumbers(node.value.(tokType), left, right)
 	case ASTExpRef:
 		return expRef{ref: node.children[0]}, nil
 	case ASTFunctionExpression:
@@ -312,6 +309,83 @@ func (intr *treeInterpreter) Execute(node ASTNode, value interface{}) (interface
 		return collected, nil
 	}
 	return nil, errors.New("Unknown AST node: " + node.nodeType.String())
+}
+
+func (intr *treeInterpreter) comparatorPlan(node ASTNode) comparatorPlan {
+	if intr == nil || len(intr.comparatorPlans) == 0 {
+		return comparatorPlan{kind: orderedValueKindNumber}
+	}
+	if plan, exists := intr.comparatorPlans[node.offset]; exists {
+		return plan
+	}
+	return comparatorPlan{kind: orderedValueKindNumber}
+}
+
+func compareNumbers(operator tokType, left, right interface{}) (interface{}, error) {
+	leftNum, ok := left.(float64)
+	if !ok {
+		return nil, nil
+	}
+	rightNum, ok := right.(float64)
+	if !ok {
+		return nil, nil
+	}
+	switch operator {
+	case tGT:
+		return leftNum > rightNum, nil
+	case tGTE:
+		return leftNum >= rightNum, nil
+	case tLT:
+		return leftNum < rightNum, nil
+	case tLTE:
+		return leftNum <= rightNum, nil
+	default:
+		return nil, nil
+	}
+}
+
+func (intr *treeInterpreter) compareDates(operator tokType, left, right interface{}, plan comparatorPlan) (interface{}, error) {
+	leftDate, err := runtimeDateValue(left, plan.leftDateLiteral)
+	if err != nil {
+		return nil, err
+	}
+	rightDate, err := runtimeDateValue(right, plan.rightDateLiteral)
+	if err != nil {
+		return nil, err
+	}
+	switch operator {
+	// Valid YYYY-MM-DD strings are lexicographically ordered the same way as
+	// their calendar dates, so we can compare strings directly and skip time.Parse.
+	case tGT:
+		return leftDate > rightDate, nil
+	case tGTE:
+		return leftDate >= rightDate, nil
+	case tLT:
+		return leftDate < rightDate, nil
+	case tLTE:
+		return leftDate <= rightDate, nil
+	default:
+		return nil, nil
+	}
+}
+
+func runtimeDateValue(value interface{}, prevalidatedLiteral string) (string, error) {
+	if prevalidatedLiteral != "" {
+		return prevalidatedLiteral, nil
+	}
+	dateString, ok := value.(string)
+	if !ok {
+		return "", invalidTypeError("expected date string in YYYY-MM-DD format")
+	}
+	// Validate the runtime value without allocating/parsing time.Time on the hot path.
+	if err := validateDateString(dateString); err != nil {
+		return "", invalidTypeError(fmt.Sprintf("expected date string in YYYY-MM-DD format: %v", err))
+	}
+	return dateString, nil
+}
+
+func invalidTypeError(message string) error {
+	return fmt.Errorf("invalid-type: %s", message)
 }
 
 func (intr *treeInterpreter) fieldFromStruct(key string, value interface{}) (interface{}, error) {

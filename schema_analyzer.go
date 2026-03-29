@@ -16,12 +16,25 @@ const (
 const staticMaskAny = staticMaskObject | staticMaskArray | staticMaskString | staticMaskNumber | staticMaskBoolean | staticMaskNull
 
 type staticType struct {
-	mask       staticTypeMask
-	object     *staticObjectType
-	array      *staticArrayType
-	constValue *scalarLiteral
-	enumValues *scalarLiteralSet
+	mask         staticTypeMask
+	object       *staticObjectType
+	array        *staticArrayType
+	constValue   *scalarLiteral
+	enumValues   *scalarLiteralSet
+	stringFormat stringFormat
+	formatSource stringFormatSource
 }
+
+type stringFormatSource uint8
+
+const (
+	stringFormatSourceNone stringFormatSource = 0
+	// Only schema-derived formats may enable special comparator semantics.
+	stringFormatSourceSchema stringFormatSource = 1 << iota
+	// Literals keep their parsed format only to preserve it through helpers like
+	// not_null(dateField, "2026-03-01"), not to allow literal-only date compares.
+	stringFormatSourceLiteral
+)
 
 type staticObjectType struct {
 	properties       map[string]*staticType
@@ -33,6 +46,30 @@ type staticObjectType struct {
 type staticArrayType struct {
 	items *staticType
 }
+
+type orderedValueKind uint8
+
+const (
+	orderedValueKindUnknown orderedValueKind = iota
+	orderedValueKindNumber
+	orderedValueKindDate
+)
+
+type comparatorPlan struct {
+	kind orderedValueKind
+	// Schema-aware compilation prevalidates date literals once so Search avoids
+	// reparsing the same YYYY-MM-DD constant for every evaluation.
+	leftDateLiteral  string
+	rightDateLiteral string
+}
+
+type staticTruthiness uint8
+
+const (
+	staticTruthinessUnknown staticTruthiness = iota
+	staticTruthinessAlwaysFalse
+	staticTruthinessAlwaysTrue
+)
 
 var (
 	staticAnyTypeValue     = &staticType{mask: staticMaskAny}
@@ -59,6 +96,10 @@ func staticFromSchemaNode(node *schemaNode, cache map[*schemaNode]*staticType) *
 	cache[node] = current
 	current.constValue = node.constValue
 	current.enumValues = node.enumValues
+	current.stringFormat = node.stringFormat
+	if node.stringFormat != stringFormatNone {
+		current.formatSource = stringFormatSourceSchema
+	}
 	switch node.kind {
 	case schemaKindObject:
 		obj := &staticObjectType{
@@ -103,11 +144,17 @@ func schemaKindMask(kind schemaKind) staticTypeMask {
 }
 
 type schemaAnalyzer struct {
-	expression   string
-	nonNullPaths map[string]struct{}
+	expression      string
+	nonNullPaths    map[string]struct{}
+	comparatorPlans map[int]comparatorPlan
 }
 
-func analyzeExpressionAgainstSchema(expression string, ast ASTNode, cs *CompiledSchema) (*staticType, error) {
+type schemaAnalysisResult struct {
+	resultType      *staticType
+	comparatorPlans map[int]comparatorPlan
+}
+
+func analyzeExpressionAgainstSchema(expression string, ast ASTNode, cs *CompiledSchema) (*schemaAnalysisResult, error) {
 	if cs == nil || cs.root == nil {
 		return nil, unsupportedSchemaError("$", "compiled schema is nil")
 	}
@@ -115,12 +162,18 @@ func analyzeExpressionAgainstSchema(expression string, ast ASTNode, cs *Compiled
 	if rootType == nil {
 		rootType = staticFromSchema(cs.root)
 	}
-	analyzer := &schemaAnalyzer{expression: expression}
+	analyzer := &schemaAnalyzer{
+		expression:      expression,
+		comparatorPlans: make(map[int]comparatorPlan),
+	}
 	result, err := analyzer.analyze(ast, rootType)
 	if err != nil {
 		return nil, err
 	}
-	return normalizeStaticType(result), nil
+	return &schemaAnalysisResult{
+		resultType:      normalizeStaticType(result),
+		comparatorPlans: analyzer.comparatorPlans,
+	}, nil
 }
 
 func (a *schemaAnalyzer) analyze(node ASTNode, input *staticType) (*staticType, error) {
@@ -265,6 +318,22 @@ func (a *schemaAnalyzer) analyzeLogical(node ASTNode, input *staticType) (*stati
 	right, err := a.analyze(node.children[1], input)
 	if err != nil {
 		return nil, err
+	}
+	if node.nodeType == ASTOrExpression {
+		switch left.truthiness() {
+		case staticTruthinessAlwaysTrue:
+			return normalizeStaticType(left), nil
+		case staticTruthinessAlwaysFalse:
+			return normalizeStaticType(right), nil
+		}
+		// `a || b` returns `a` only when `a` is truthy. For unknown truthiness we
+		// conservatively remove the null branch from the left side, because null
+		// would force evaluation to fall through to `b`.
+		leftWhenTruthy := staticWithoutNull(left)
+		if staticTypeIsEmpty(leftWhenTruthy) {
+			return normalizeStaticType(right), nil
+		}
+		return staticUnion(leftWhenTruthy, right), nil
 	}
 	return staticUnion(left, right), nil
 }
@@ -487,15 +556,73 @@ func (a *schemaAnalyzer) analyzeComparator(node ASTNode, input *staticType) (*st
 	}
 	left = normalizeStaticType(left)
 	right = normalizeStaticType(right)
-	left = staticWithoutNull(left)
-	right = staticWithoutNull(right)
-	if !left.includes(staticMaskNumber) || !right.includes(staticMaskNumber) {
-		return nil, a.errorAt(node, staticErrInvalidComparator, "comparator requires number operands")
+	plan, err := a.validateOrderedComparator(node, node.children[0], node.children[1], left, right)
+	if err != nil {
+		return nil, err
 	}
-	if !left.isDefinite(staticMaskNumber) || !right.isDefinite(staticMaskNumber) {
-		return nil, a.errorAt(node, staticErrUnverifiableType, "cannot prove comparator operands are numbers")
-	}
+	// Persist the comparator plan on the AST offset so the interpreter can reuse
+	// compile-time decisions on the runtime hot path.
+	a.comparatorPlans[node.offset] = plan
 	return staticBooleanTypeValue, nil
+}
+
+func (a *schemaAnalyzer) validateOrderedComparator(node, leftNode, rightNode ASTNode, left, right *staticType) (comparatorPlan, error) {
+	leftNonNull := staticWithoutNull(left)
+	rightNonNull := staticWithoutNull(right)
+	if leftNonNull.isDefinite(staticMaskNumber) && rightNonNull.isDefinite(staticMaskNumber) {
+		return comparatorPlan{kind: orderedValueKindNumber}, nil
+	}
+	if leftNonNull.includes(staticMaskNumber) && rightNonNull.includes(staticMaskNumber) {
+		return comparatorPlan{}, a.errorAt(node, staticErrUnverifiableType, "cannot prove comparator operands are numbers")
+	}
+
+	leftDateSchema := leftNonNull.hasStringFormat(stringFormatDate)
+	rightDateSchema := rightNonNull.hasStringFormat(stringFormatDate)
+	if leftDateSchema || rightDateSchema {
+		if err := a.validateDateComparatorNullSafety(node, left, right, leftDateSchema, rightDateSchema); err != nil {
+			return comparatorPlan{}, err
+		}
+		leftMatches, leftLiteral := a.dateComparatorOperand(leftNode, leftNonNull, rightDateSchema)
+		rightMatches, rightLiteral := a.dateComparatorOperand(rightNode, rightNonNull, leftDateSchema)
+		if !leftMatches || !rightMatches {
+			return comparatorPlan{}, a.errorAt(node, staticErrInvalidComparator, "comparator requires number operands or date operands")
+		}
+		return comparatorPlan{
+			kind:             orderedValueKindDate,
+			leftDateLiteral:  leftLiteral,
+			rightDateLiteral: rightLiteral,
+		}, nil
+	}
+
+	return comparatorPlan{}, a.errorAt(node, staticErrInvalidComparator, "comparator requires number operands or date operands")
+}
+
+func (a *schemaAnalyzer) validateDateComparatorNullSafety(node ASTNode, left, right *staticType, leftDateSchema, rightDateSchema bool) error {
+	if leftDateSchema && left.includes(staticMaskNull) {
+		return a.errorAt(node, staticErrUnsafeOptionalArg, "date comparator operand may be missing or null and can trigger invalid-type")
+	}
+	if rightDateSchema && right.includes(staticMaskNull) {
+		return a.errorAt(node, staticErrUnsafeOptionalArg, "date comparator operand may be missing or null and can trigger invalid-type")
+	}
+	return nil
+}
+
+func (a *schemaAnalyzer) dateComparatorOperand(node ASTNode, typ *staticType, otherIsDateSchema bool) (bool, string) {
+	// A schema date operand may be compared to another schema date or to a
+	// prevalidated YYYY-MM-DD literal on the opposite side.
+	if value, ok := dateLiteralValue(node); ok {
+		return true, value
+	}
+	if typ.hasStringFormat(stringFormatDate) {
+		return true, ""
+	}
+	if !otherIsDateSchema {
+		return false, ""
+	}
+	if format, _, hasString := typ.nonNullStringFormat(); hasString && format == stringFormatDate {
+		return true, ""
+	}
+	return false, ""
 }
 
 func (a *schemaAnalyzer) validateComparatorLiteralMembership(leftNode, rightNode ASTNode, leftType, rightType *staticType) error {
@@ -1023,15 +1150,10 @@ func inferNotNullReturnType(args []*staticType) *staticType {
 }
 
 func staticTypeFromLiteral(value interface{}) *staticType {
+	if literal, ok := scalarLiteralFromInterface(value); ok {
+		return staticTypeFromScalarLiteral(literal)
+	}
 	switch value.(type) {
-	case nil:
-		return staticNullTypeValue
-	case string:
-		return staticStringTypeValue
-	case float64:
-		return staticNumberTypeValue
-	case bool:
-		return staticBooleanTypeValue
 	case []interface{}:
 		return staticArrayOf(staticAnyTypeValue)
 	case map[string]interface{}:
@@ -1039,6 +1161,31 @@ func staticTypeFromLiteral(value interface{}) *staticType {
 	default:
 		return staticAnyTypeValue
 	}
+}
+
+func staticTypeFromScalarLiteral(literal scalarLiteral) *staticType {
+	result := &staticType{
+		mask:       schemaKindMask(literal.toSchemaKind()),
+		constValue: &literal,
+	}
+	if literal.kind == scalarLiteralString && isValidDateString(literal.stringValue) {
+		// Preserve date-looking literals so unions such as
+		// not_null(optionalDate, "2026-03-01") retain the date format signal.
+		result.stringFormat = stringFormatDate
+		result.formatSource = stringFormatSourceLiteral
+	}
+	return result
+}
+
+func dateLiteralValue(node ASTNode) (string, bool) {
+	if node.nodeType != ASTLiteral {
+		return "", false
+	}
+	value, ok := node.value.(string)
+	if !ok || !isValidDateString(value) {
+		return "", false
+	}
+	return value, true
 }
 
 func staticArrayOf(items *staticType) *staticType {
@@ -1063,11 +1210,13 @@ func staticWithoutNull(typ *staticType) *staticType {
 	}
 	mask := current.mask &^ staticMaskNull
 	result := &staticType{
-		mask:       mask,
-		object:     current.object,
-		array:      current.array,
-		constValue: current.constValue,
-		enumValues: current.enumValues,
+		mask:         mask,
+		object:       current.object,
+		array:        current.array,
+		constValue:   current.constValue,
+		enumValues:   current.enumValues,
+		stringFormat: current.stringFormat,
+		formatSource: current.formatSource,
 	}
 	if mask&staticMaskObject == 0 {
 		result.object = nil
@@ -1075,10 +1224,16 @@ func staticWithoutNull(typ *staticType) *staticType {
 	if mask&staticMaskArray == 0 {
 		result.array = nil
 	}
-	// Constraints are only sound for exact scalar types.
+	// Constraints and string formats are only sound for exact string/scalar types.
 	if mask == 0 || mask&(mask-1) != 0 || mask&(staticMaskObject|staticMaskArray) != 0 {
 		result.constValue = nil
 		result.enumValues = nil
+		result.stringFormat = stringFormatNone
+		result.formatSource = stringFormatSourceNone
+	}
+	if mask != staticMaskString {
+		result.stringFormat = stringFormatNone
+		result.formatSource = stringFormatSourceNone
 	}
 	return result
 }
@@ -1145,6 +1300,7 @@ func staticUnion(left, right *staticType) *staticType {
 		}
 	}
 	union.constValue, union.enumValues = unionScalarConstraints(l, r, union.mask)
+	union.stringFormat, union.formatSource = unionStringFormat(l, r, union.mask)
 	return union
 }
 
@@ -1182,11 +1338,51 @@ func scalarLiteralSetsEqual(left, right *scalarLiteralSet) bool {
 	return true
 }
 
+func unionStringFormat(left, right *staticType, unionMask staticTypeMask) (stringFormat, stringFormatSource) {
+	if unionMask&^(staticMaskString|staticMaskNull) != 0 || unionMask&staticMaskString == 0 {
+		return stringFormatNone, stringFormatSourceNone
+	}
+	leftFormat, leftSource, leftHasString := left.nonNullStringFormat()
+	rightFormat, rightSource, rightHasString := right.nonNullStringFormat()
+	switch {
+	case leftHasString && rightHasString:
+		if leftFormat == rightFormat {
+			source := leftSource | rightSource
+			// Literal-only unions must not manufacture schema-level date semantics.
+			if source == stringFormatSourceLiteral {
+				return stringFormatNone, stringFormatSourceNone
+			}
+			return leftFormat, source
+		}
+		return stringFormatNone, stringFormatSourceNone
+	case leftHasString:
+		if leftSource == stringFormatSourceLiteral {
+			return stringFormatNone, stringFormatSourceNone
+		}
+		return leftFormat, leftSource
+	case rightHasString:
+		if rightSource == stringFormatSourceLiteral {
+			return stringFormatNone, stringFormatSourceNone
+		}
+		return rightFormat, rightSource
+	default:
+		return stringFormatNone, stringFormatSourceNone
+	}
+}
+
 func normalizeStaticType(typ *staticType) *staticType {
 	if typ == nil {
 		return staticAnyTypeValue
 	}
 	return typ
+}
+
+func (t *staticType) nonNullStringFormat() (stringFormat, stringFormatSource, bool) {
+	current := staticWithoutNull(normalizeStaticType(t))
+	if current.mask != staticMaskString {
+		return stringFormatNone, stringFormatSourceNone, false
+	}
+	return current.stringFormat, current.formatSource, true
 }
 
 func (t *staticType) includes(mask staticTypeMask) bool {
@@ -1197,6 +1393,100 @@ func (t *staticType) includes(mask staticTypeMask) bool {
 func (t *staticType) isDefinite(mask staticTypeMask) bool {
 	current := normalizeStaticType(t)
 	return current.mask == mask
+}
+
+func (t *staticType) hasStringFormat(format stringFormat) bool {
+	current := normalizeStaticType(t)
+	return current.isDefinite(staticMaskString) &&
+		current.stringFormat == format &&
+		current.formatSource != stringFormatSourceLiteral
+}
+
+func (t *staticType) truthiness() staticTruthiness {
+	current := normalizeStaticType(t)
+	canBeTruthy := current.canBeTruthy()
+	canBeFalsey := current.canBeFalsey()
+	switch {
+	case canBeTruthy && canBeFalsey:
+		return staticTruthinessUnknown
+	case canBeTruthy:
+		return staticTruthinessAlwaysTrue
+	case canBeFalsey:
+		return staticTruthinessAlwaysFalse
+	default:
+		return staticTruthinessUnknown
+	}
+}
+
+func (t *staticType) canBeTruthy() bool {
+	current := normalizeStaticType(t)
+	if current.mask&staticMaskNumber != 0 {
+		return true
+	}
+	if current.mask&staticMaskArray != 0 {
+		return true
+	}
+	if current.mask&staticMaskObject != 0 {
+		return true
+	}
+	if current.mask&staticMaskBoolean != 0 {
+		if current.constValue != nil && current.constValue.kind == scalarLiteralBoolean {
+			return current.constValue.boolValue
+		}
+		if current.enumValues != nil {
+			return current.enumValues.contains(scalarLiteral{kind: scalarLiteralBoolean, boolValue: true})
+		}
+		return true
+	}
+	if current.mask&staticMaskString != 0 {
+		if current.constValue != nil && current.constValue.kind == scalarLiteralString {
+			return current.constValue.stringValue != ""
+		}
+		if current.enumValues != nil {
+			for _, value := range current.enumValues.values {
+				if value.kind == scalarLiteralString && value.stringValue != "" {
+					return true
+				}
+			}
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+func (t *staticType) canBeFalsey() bool {
+	current := normalizeStaticType(t)
+	if current.mask&staticMaskNull != 0 {
+		return true
+	}
+	if current.mask&staticMaskArray != 0 {
+		return true
+	}
+	if current.mask&staticMaskObject != 0 {
+		if current.object == nil || len(current.object.required) == 0 {
+			return true
+		}
+	}
+	if current.mask&staticMaskBoolean != 0 {
+		if current.constValue != nil && current.constValue.kind == scalarLiteralBoolean {
+			return !current.constValue.boolValue
+		}
+		if current.enumValues != nil {
+			return current.enumValues.contains(scalarLiteral{kind: scalarLiteralBoolean, boolValue: false})
+		}
+		return true
+	}
+	if current.mask&staticMaskString != 0 {
+		if current.constValue != nil && current.constValue.kind == scalarLiteralString {
+			return current.constValue.stringValue == ""
+		}
+		if current.enumValues != nil {
+			return current.enumValues.contains(scalarLiteral{kind: scalarLiteralString, stringValue: ""})
+		}
+		return true
+	}
+	return false
 }
 
 func (t *staticArrayType) itemType() *staticType {

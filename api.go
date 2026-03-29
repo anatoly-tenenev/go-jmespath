@@ -82,7 +82,8 @@ func CompileWithCompiledSchemaOptions(expression string, cs *CompiledSchema, opt
 	if err != nil {
 		return nil, err
 	}
-	if _, err := analyzeExpressionAgainstSchema(expression, ast, cs); err != nil {
+	analysis, err := analyzeExpressionAgainstSchema(expression, ast, cs)
+	if err != nil {
 		return nil, err
 	}
 	var guardsWhenTrue *GuardAnalysis
@@ -91,7 +92,9 @@ func CompileWithCompiledSchemaOptions(expression string, cs *CompiledSchema, opt
 	}
 	return &JMESPath{
 		ast:            ast,
-		intr:           newInterpreter(),
+		// The interpreter consumes compile-time comparator plans to avoid repeating
+		// date-format checks and literal parsing work during Search.
+		intr:           newInterpreterWithComparatorPlans(analysis.comparatorPlans),
 		guardsWhenTrue: guardsWhenTrue,
 	}, nil
 }
@@ -118,11 +121,11 @@ func InferTypeWithCompiledSchema(expression string, cs *CompiledSchema) (*Inferr
 	if err != nil {
 		return nil, err
 	}
-	inferredStaticType, err := analyzeExpressionAgainstSchema(expression, ast, cs)
+	analysis, err := analyzeExpressionAgainstSchema(expression, ast, cs)
 	if err != nil {
 		return nil, err
 	}
-	return inferredTypeFromStatic(inferredStaticType), nil
+	return inferredTypeFromStatic(analysis.resultType), nil
 }
 
 // Search evaluates a JMESPath expression against input data and returns the result.
