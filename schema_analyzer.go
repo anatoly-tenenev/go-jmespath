@@ -103,7 +103,8 @@ func schemaKindMask(kind schemaKind) staticTypeMask {
 }
 
 type schemaAnalyzer struct {
-	expression string
+	expression   string
+	nonNullPaths map[string]struct{}
 }
 
 func analyzeExpressionAgainstSchema(expression string, ast ASTNode, cs *CompiledSchema) (*staticType, error) {
@@ -123,27 +124,31 @@ func analyzeExpressionAgainstSchema(expression string, ast ASTNode, cs *Compiled
 }
 
 func (a *schemaAnalyzer) analyze(node ASTNode, input *staticType) (*staticType, error) {
+	var (
+		result *staticType
+		err    error
+	)
 	switch node.nodeType {
 	case ASTEmpty, ASTCurrentNode, ASTIdentity:
-		return normalizeStaticType(input), nil
+		result = normalizeStaticType(input)
 	case ASTField:
-		return a.analyzeField(node, input)
+		result, err = a.analyzeField(node, input)
 	case ASTSubexpression, ASTPipe:
-		return a.analyzeSequential(node, input)
+		result, err = a.analyzeSequential(node, input)
 	case ASTIndexExpression:
-		return a.analyzeIndexExpression(node, input)
+		result, err = a.analyzeIndexExpression(node, input)
 	case ASTProjection:
-		return a.analyzeProjection(node, input)
+		result, err = a.analyzeProjection(node, input)
 	case ASTFilterProjection:
-		return a.analyzeFilterProjection(node, input)
+		result, err = a.analyzeFilterProjection(node, input)
 	case ASTFlatten:
-		return a.analyzeFlatten(node, input)
+		result, err = a.analyzeFlatten(node, input)
 	case ASTValueProjection:
-		return a.analyzeValueProjection(node, input)
+		result, err = a.analyzeValueProjection(node, input)
 	case ASTComparator:
-		return a.analyzeComparator(node, input)
+		result, err = a.analyzeComparator(node, input)
 	case ASTFunctionExpression:
-		return a.analyzeFunction(node, input)
+		result, err = a.analyzeFunction(node, input)
 	case ASTExpRef:
 		if len(node.children) == 1 {
 			_, err := a.analyze(node.children[0], input)
@@ -151,33 +156,84 @@ func (a *schemaAnalyzer) analyze(node ASTNode, input *staticType) (*staticType, 
 				return nil, err
 			}
 		}
-		return staticAnyTypeValue, nil
+		result = staticAnyTypeValue
 	case ASTLiteral:
-		return staticTypeFromLiteral(node.value), nil
+		result = staticTypeFromLiteral(node.value)
 	case ASTMultiSelectList:
-		return a.analyzeMultiSelectList(node, input)
+		result, err = a.analyzeMultiSelectList(node, input)
 	case ASTMultiSelectHash:
-		return a.analyzeMultiSelectHash(node, input)
+		result, err = a.analyzeMultiSelectHash(node, input)
 	case ASTKeyValPair:
 		if len(node.children) == 0 {
-			return staticAnyTypeValue, nil
+			result = staticAnyTypeValue
+			break
 		}
-		return a.analyze(node.children[0], input)
+		result, err = a.analyze(node.children[0], input)
 	case ASTOrExpression, ASTAndExpression:
-		return a.analyzeLogical(node, input)
+		result, err = a.analyzeLogical(node, input)
 	case ASTNotExpression:
 		if len(node.children) == 0 {
-			return staticBooleanTypeValue, nil
+			result = staticBooleanTypeValue
+			break
 		}
 		_, err := a.analyze(node.children[0], input)
 		if err != nil {
 			return nil, err
 		}
-		return staticBooleanTypeValue, nil
+		result = staticBooleanTypeValue
 	case ASTSlice, ASTIndex:
-		return normalizeStaticType(input), nil
+		result = normalizeStaticType(input)
 	default:
-		return staticAnyTypeValue, nil
+		result = staticAnyTypeValue
+	}
+	if err != nil {
+		return nil, err
+	}
+	return a.applyNonNullNarrowing(node, result), nil
+}
+
+func (a *schemaAnalyzer) applyNonNullNarrowing(node ASTNode, typ *staticType) *staticType {
+	if len(a.nonNullPaths) == 0 {
+		return typ
+	}
+	path, ok := narrowablePath(node)
+	if !ok {
+		return typ
+	}
+	if _, exists := a.nonNullPaths[path]; !exists {
+		return typ
+	}
+	return staticWithoutNull(typ)
+}
+
+func narrowablePath(node ASTNode) (string, bool) {
+	switch node.nodeType {
+	case ASTField, ASTSubexpression, ASTIndexExpression:
+		path, ok := narrowableSchemaPath(node)
+		if !ok || path == "" || path == "@" {
+			return "", false
+		}
+		return path, true
+	default:
+		return "", false
+	}
+}
+
+func (a *schemaAnalyzer) pushNonNullPathsFromGuardSet(paths guardPathSet) func() {
+	if len(paths) == 0 {
+		return func() {}
+	}
+	previous := a.nonNullPaths
+	merged := make(map[string]struct{}, len(previous)+len(paths))
+	for path := range previous {
+		merged[path] = struct{}{}
+	}
+	for path := range paths {
+		merged[path] = struct{}{}
+	}
+	a.nonNullPaths = merged
+	return func() {
+		a.nonNullPaths = previous
 	}
 }
 
@@ -201,6 +257,11 @@ func (a *schemaAnalyzer) analyzeLogical(node ASTNode, input *staticType) (*stati
 	if err != nil {
 		return nil, err
 	}
+	if node.nodeType == ASTAndExpression {
+		guards := (&guardAnalyzer{}).analyzeWhenTrue(node.children[0])
+		restoreNonNullPaths := a.pushNonNullPathsFromGuardSet(guards)
+		defer restoreNonNullPaths()
+	}
 	right, err := a.analyze(node.children[1], input)
 	if err != nil {
 		return nil, err
@@ -213,16 +274,24 @@ func (a *schemaAnalyzer) analyzeField(node ASTNode, input *staticType) (*staticT
 	if !target.includes(staticMaskObject) {
 		return nil, a.errorAt(node, staticErrInvalidFieldTarget, "field access requires object target")
 	}
-	if !target.isDefinite(staticMaskObject) || target.object == nil {
+	targetWithoutNull := staticWithoutNull(target)
+	if !targetWithoutNull.isDefinite(staticMaskObject) || targetWithoutNull.object == nil {
 		return nil, a.errorAt(node, staticErrUnverifiableType, "cannot prove field target is object")
 	}
 	name, _ := node.value.(string)
-	if target.object.properties != nil {
-		if value, exists := target.object.properties[name]; exists {
-			return value, nil
+	if targetWithoutNull.object.properties != nil {
+		if value, exists := targetWithoutNull.object.properties[name]; exists {
+			result := value
+			if !targetWithoutNull.object.isRequired(name) {
+				result = staticNullable(result)
+			}
+			if target.includes(staticMaskNull) {
+				result = staticNullable(result)
+			}
+			return result, nil
 		}
 	}
-	switch target.object.additionalMode {
+	switch targetWithoutNull.object.additionalMode {
 	case additionalPropertiesForbid:
 		return nil, a.errorAt(node, staticErrUnknownProperty, fmt.Sprintf("unknown property %q", name))
 	case additionalPropertiesAllowOpen, additionalPropertiesTyped:
@@ -244,14 +313,23 @@ func (a *schemaAnalyzer) analyzeIndexExpression(node ASTNode, input *staticType)
 	if !target.includes(staticMaskArray) {
 		return nil, a.errorAt(node, staticErrInvalidIndexTarget, "index/slice requires array target")
 	}
-	if !target.isDefinite(staticMaskArray) || target.array == nil {
+	targetWithoutNull := staticWithoutNull(target)
+	if !targetWithoutNull.isDefinite(staticMaskArray) || targetWithoutNull.array == nil {
 		return nil, a.errorAt(node, staticErrUnverifiableType, "cannot prove index target is array")
 	}
-	itemType := target.array.itemType()
+	itemType := targetWithoutNull.array.itemType()
 	if node.children[1].nodeType == ASTSlice {
-		return staticArrayOf(itemType), nil
+		result := staticArrayOf(itemType)
+		if target.includes(staticMaskNull) {
+			result = staticNullable(result)
+		}
+		return result, nil
 	}
-	return itemType, nil
+	result := staticNullable(itemType)
+	if target.includes(staticMaskNull) {
+		result = staticNullable(result)
+	}
+	return result, nil
 }
 
 func (a *schemaAnalyzer) analyzeProjection(node ASTNode, input *staticType) (*staticType, error) {
@@ -266,14 +344,19 @@ func (a *schemaAnalyzer) analyzeProjection(node ASTNode, input *staticType) (*st
 	if !target.includes(staticMaskArray) {
 		return nil, a.errorAt(node, staticErrInvalidProjection, "projection requires array target")
 	}
-	if !target.isDefinite(staticMaskArray) || target.array == nil {
+	targetWithoutNull := staticWithoutNull(target)
+	if !targetWithoutNull.isDefinite(staticMaskArray) || targetWithoutNull.array == nil {
 		return nil, a.errorAt(node, staticErrUnverifiableType, "cannot prove projection target is array")
 	}
-	result, err := a.analyze(node.children[1], target.array.itemType())
+	result, err := a.analyze(node.children[1], targetWithoutNull.array.itemType())
 	if err != nil {
 		return nil, err
 	}
-	return staticArrayOf(result), nil
+	typedResult := staticArrayOf(result)
+	if target.includes(staticMaskNull) {
+		return staticNullable(typedResult), nil
+	}
+	return typedResult, nil
 }
 
 func (a *schemaAnalyzer) analyzeFilterProjection(node ASTNode, input *staticType) (*staticType, error) {
@@ -288,10 +371,11 @@ func (a *schemaAnalyzer) analyzeFilterProjection(node ASTNode, input *staticType
 	if !target.includes(staticMaskArray) {
 		return nil, a.errorAt(node, staticErrInvalidProjection, "filter projection requires array target")
 	}
-	if !target.isDefinite(staticMaskArray) || target.array == nil {
+	targetWithoutNull := staticWithoutNull(target)
+	if !targetWithoutNull.isDefinite(staticMaskArray) || targetWithoutNull.array == nil {
 		return nil, a.errorAt(node, staticErrUnverifiableType, "cannot prove filter projection target is array")
 	}
-	elementType := target.array.itemType()
+	elementType := targetWithoutNull.array.itemType()
 	_, err = a.analyze(node.children[2], elementType)
 	if err != nil {
 		return nil, err
@@ -300,7 +384,11 @@ func (a *schemaAnalyzer) analyzeFilterProjection(node ASTNode, input *staticType
 	if err != nil {
 		return nil, err
 	}
-	return staticArrayOf(result), nil
+	typedResult := staticArrayOf(result)
+	if target.includes(staticMaskNull) {
+		return staticNullable(typedResult), nil
+	}
+	return typedResult, nil
 }
 
 func (a *schemaAnalyzer) analyzeFlatten(node ASTNode, input *staticType) (*staticType, error) {
@@ -315,15 +403,25 @@ func (a *schemaAnalyzer) analyzeFlatten(node ASTNode, input *staticType) (*stati
 	if !target.includes(staticMaskArray) {
 		return nil, a.errorAt(node, staticErrInvalidProjection, "flatten requires array target")
 	}
-	if !target.isDefinite(staticMaskArray) || target.array == nil {
+	targetWithoutNull := staticWithoutNull(target)
+	if !targetWithoutNull.isDefinite(staticMaskArray) || targetWithoutNull.array == nil {
 		return nil, a.errorAt(node, staticErrUnverifiableType, "cannot prove flatten target is array")
 	}
-	itemType := target.array.itemType()
+	itemType := targetWithoutNull.array.itemType()
+	maybeNullTarget := target.includes(staticMaskNull)
 	if itemType.isDefinite(staticMaskArray) && itemType.array != nil {
-		return staticArrayOf(itemType.array.itemType()), nil
+		result := staticArrayOf(itemType.array.itemType())
+		if maybeNullTarget {
+			return staticNullable(result), nil
+		}
+		return result, nil
 	}
 	if !itemType.includes(staticMaskArray) {
-		return staticArrayOf(itemType), nil
+		result := staticArrayOf(itemType)
+		if maybeNullTarget {
+			return staticNullable(result), nil
+		}
+		return result, nil
 	}
 	merged := staticAnyTypeValue
 	if itemType.array != nil {
@@ -333,7 +431,11 @@ func (a *schemaAnalyzer) analyzeFlatten(node ASTNode, input *staticType) (*stati
 	if nonArrayMask != 0 {
 		merged = staticUnion(merged, &staticType{mask: nonArrayMask})
 	}
-	return staticArrayOf(merged), nil
+	result := staticArrayOf(merged)
+	if maybeNullTarget {
+		return staticNullable(result), nil
+	}
+	return result, nil
 }
 
 func (a *schemaAnalyzer) analyzeValueProjection(node ASTNode, input *staticType) (*staticType, error) {
@@ -348,15 +450,20 @@ func (a *schemaAnalyzer) analyzeValueProjection(node ASTNode, input *staticType)
 	if !target.includes(staticMaskObject) {
 		return nil, a.errorAt(node, staticErrInvalidProjection, "value projection requires object target")
 	}
-	if !target.isDefinite(staticMaskObject) || target.object == nil {
+	targetWithoutNull := staticWithoutNull(target)
+	if !targetWithoutNull.isDefinite(staticMaskObject) || targetWithoutNull.object == nil {
 		return nil, a.errorAt(node, staticErrUnverifiableType, "cannot prove value projection target is object")
 	}
-	valuesType := target.object.valuesType()
+	valuesType := targetWithoutNull.object.valuesType()
 	result, err := a.analyze(node.children[1], valuesType)
 	if err != nil {
 		return nil, err
 	}
-	return staticArrayOf(result), nil
+	typedResult := staticArrayOf(result)
+	if target.includes(staticMaskNull) {
+		return staticNullable(typedResult), nil
+	}
+	return typedResult, nil
 }
 
 func (a *schemaAnalyzer) analyzeComparator(node ASTNode, input *staticType) (*staticType, error) {
@@ -380,6 +487,8 @@ func (a *schemaAnalyzer) analyzeComparator(node ASTNode, input *staticType) (*st
 	}
 	left = normalizeStaticType(left)
 	right = normalizeStaticType(right)
+	left = staticWithoutNull(left)
+	right = staticWithoutNull(right)
 	if !left.includes(staticMaskNumber) || !right.includes(staticMaskNumber) {
 		return nil, a.errorAt(node, staticErrInvalidComparator, "comparator requires number operands")
 	}
@@ -510,6 +619,8 @@ func (a *schemaAnalyzer) analyzeFunction(node ASTNode, input *staticType) (*stat
 		return a.analyzeMapFunction(node, input, entry)
 	case "max_by", "min_by", "sort_by":
 		return a.analyzeByFunction(node, input, entry, name)
+	case "not_null":
+		return a.analyzeNotNullFunction(node, input)
 	default:
 		argTypes := make([]*staticType, len(node.children))
 		for i, argNode := range node.children {
@@ -553,6 +664,21 @@ func (a *schemaAnalyzer) analyzeMapFunction(node ASTNode, input *staticType, ent
 	return staticArrayOf(resultType), nil
 }
 
+func (a *schemaAnalyzer) analyzeNotNullFunction(node ASTNode, input *staticType) (*staticType, error) {
+	argTypes := make([]*staticType, 0, len(node.children))
+	for _, argNode := range node.children {
+		argType, err := a.analyze(argNode, input)
+		if err != nil {
+			return nil, err
+		}
+		argTypes = append(argTypes, argType)
+		if !normalizeStaticType(argType).includes(staticMaskNull) {
+			break
+		}
+	}
+	return inferNotNullReturnType(argTypes), nil
+}
+
 func (a *schemaAnalyzer) analyzeByFunction(node ASTNode, input *staticType, entry functionEntry, name string) (*staticType, error) {
 	arrayArg := node.children[0]
 	exprefArg := node.children[1]
@@ -571,12 +697,8 @@ func (a *schemaAnalyzer) analyzeByFunction(node ASTNode, input *staticType, entr
 	if err != nil {
 		return nil, err
 	}
-	match := evaluateArgMatch(exprefResultType, []jpType{jpNumber, jpString})
-	if match == argMatchNo {
-		return nil, a.errorAt(exprefArg, staticErrInvalidFuncArgType, fmt.Sprintf("function %q expects expref result to be number or string", name))
-	}
-	if match == argMatchMaybe {
-		return nil, a.errorAt(exprefArg, staticErrUnverifiableType, fmt.Sprintf("cannot prove function %q expref result type", name))
+	if err := a.validateByFunctionExprefResult(name, exprefArg, exprefResultType); err != nil {
+		return nil, err
 	}
 	if name == "sort_by" {
 		return normalizeStaticType(arrayType), nil
@@ -589,6 +711,30 @@ func (a *schemaAnalyzer) analyzeExpRefArg(node ASTNode, elementType *staticType)
 		return nil, a.errorAt(node, staticErrInvalidFuncArgType, "expected expression reference")
 	}
 	return a.analyze(node.children[0], elementType)
+}
+
+func (a *schemaAnalyzer) validateByFunctionExprefResult(functionName string, node ASTNode, resultType *staticType) error {
+	normalized := normalizeStaticType(resultType)
+	hasNullableRisk := normalized.includes(staticMaskNull)
+	matchType := normalized
+	if hasNullableRisk {
+		matchType = staticWithoutNull(normalized)
+		if staticTypeIsEmpty(matchType) {
+			return a.errorAt(node, staticErrUnsafeOptionalArg, fmt.Sprintf("function %q argument 2 may evaluate to missing or null and can trigger invalid-type", functionName))
+		}
+	}
+	match := evaluateArgMatch(matchType, []jpType{jpNumber, jpString})
+	switch match {
+	case argMatchYes:
+		if hasNullableRisk {
+			return a.errorAt(node, staticErrUnsafeOptionalArg, fmt.Sprintf("function %q argument 2 may evaluate to missing or null and can trigger invalid-type", functionName))
+		}
+		return nil
+	case argMatchMaybe:
+		return a.errorAt(node, staticErrUnverifiableType, fmt.Sprintf("cannot prove function %q expref result type", functionName))
+	default:
+		return a.errorAt(node, staticErrInvalidFuncArgType, fmt.Sprintf("function %q expects expref result to be number or string", functionName))
+	}
 }
 
 func (a *schemaAnalyzer) ensureArrayElementType(node ASTNode, typ *staticType) (*staticType, error) {
@@ -609,9 +755,24 @@ func (a *schemaAnalyzer) validateFunctionArg(functionName string, argIndex int, 
 		}
 		return nil
 	}
-	match := evaluateArgMatch(argType, spec.types)
+	normalized := normalizeStaticType(argType)
+	hasNullableRisk := normalized.includes(staticMaskNull) && !specAllowsNull(spec)
+	matchType := normalized
+	if hasNullableRisk {
+		matchType = staticWithoutNull(normalized)
+		if staticTypeIsEmpty(matchType) {
+			return a.errorAt(node, staticErrUnsafeOptionalArg, fmt.Sprintf("function %q argument %d may be missing or null and can trigger invalid-type", functionName, argIndex+1))
+		}
+	}
+	if typedArrayNullableRisk(matchType, spec.types) {
+		return a.errorAt(node, staticErrUnsafeOptionalArg, fmt.Sprintf("function %q argument %d may contain null elements and can trigger invalid-type", functionName, argIndex+1))
+	}
+	match := evaluateArgMatch(matchType, spec.types)
 	switch match {
 	case argMatchYes:
+		if hasNullableRisk {
+			return a.errorAt(node, staticErrUnsafeOptionalArg, fmt.Sprintf("function %q argument %d may be missing or null and can trigger invalid-type", functionName, argIndex+1))
+		}
 		return nil
 	case argMatchMaybe:
 		return a.errorAt(node, staticErrUnverifiableType, fmt.Sprintf("cannot prove function %q argument %d type", functionName, argIndex+1))
@@ -693,6 +854,34 @@ func matchTypedArray(typ *staticType, itemMask staticTypeMask) argMatch {
 	return argMatchMaybe
 }
 
+func typedArrayNullableRisk(argType *staticType, expected []jpType) bool {
+	current := normalizeStaticType(argType)
+	if !current.isDefinite(staticMaskArray) || current.array == nil {
+		return false
+	}
+	items := current.array.itemType()
+	if !items.includes(staticMaskNull) {
+		return false
+	}
+	nonNullItems := staticWithoutNull(items)
+	if staticTypeIsEmpty(nonNullItems) {
+		return true
+	}
+	for _, typ := range expected {
+		switch typ {
+		case jpArrayNumber:
+			if nonNullItems.isDefinite(staticMaskNumber) {
+				return true
+			}
+		case jpArrayString:
+			if nonNullItems.isDefinite(staticMaskString) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func isValidFunctionArity(arguments []argSpec, nodes []ASTNode) bool {
 	if len(arguments) == 0 {
 		return len(nodes) == 0
@@ -718,9 +907,18 @@ func functionArgSpecForIndex(arguments []argSpec, index int) argSpec {
 	return last
 }
 
+func specAllowsNull(spec argSpec) bool {
+	for _, typ := range spec.types {
+		if typ == jpAny {
+			return true
+		}
+	}
+	return false
+}
+
 func inferFunctionReturnType(name string, args []*staticType) *staticType {
 	switch name {
-	case "length", "abs", "avg", "ceil", "floor", "sum", "to_number":
+	case "length", "abs", "avg", "ceil", "floor", "sum":
 		return staticNumberTypeValue
 	case "starts_with", "contains", "ends_with":
 		return staticBooleanTypeValue
@@ -732,15 +930,10 @@ func inferFunctionReturnType(name string, args []*staticType) *staticType {
 		return staticArrayOf(staticAnyTypeValue)
 	case "merge":
 		return staticOpenObject()
+	case "to_number":
+		return inferToNumberReturnType(args)
 	case "max", "min":
-		if len(args) == 0 {
-			return staticAnyTypeValue
-		}
-		first := normalizeStaticType(args[0])
-		if first.isDefinite(staticMaskArray) && first.array != nil {
-			return first.array.itemType()
-		}
-		return staticAnyTypeValue
+		return inferMinMaxReturnType(args)
 	case "sort":
 		if len(args) == 0 {
 			return staticArrayOf(staticAnyTypeValue)
@@ -769,17 +962,64 @@ func inferFunctionReturnType(name string, args []*staticType) *staticType {
 		}
 		return staticArrayOf(staticAnyTypeValue)
 	case "not_null":
-		var merged *staticType
-		for _, arg := range args {
-			merged = staticUnion(merged, arg)
-		}
-		if merged == nil {
-			return staticAnyTypeValue
-		}
-		return merged
+		return inferNotNullReturnType(args)
 	default:
 		return staticAnyTypeValue
 	}
+}
+
+func inferToNumberReturnType(args []*staticType) *staticType {
+	if len(args) == 0 {
+		return staticNullable(staticNumberTypeValue)
+	}
+	first := normalizeStaticType(args[0])
+	if first.isDefinite(staticMaskNumber) {
+		return staticNumberTypeValue
+	}
+	if first.includes(staticMaskNumber) || first.includes(staticMaskString) {
+		return staticNullable(staticNumberTypeValue)
+	}
+	return staticNullTypeValue
+}
+
+func inferMinMaxReturnType(args []*staticType) *staticType {
+	if len(args) == 0 {
+		return staticAnyTypeValue
+	}
+	first := normalizeStaticType(args[0])
+	if first.isDefinite(staticMaskArray) && first.array != nil {
+		return staticNullable(first.array.itemType())
+	}
+	return staticAnyTypeValue
+}
+
+func inferNotNullReturnType(args []*staticType) *staticType {
+	if len(args) == 0 {
+		return staticAnyTypeValue
+	}
+	var result *staticType
+	allMayBeNull := true
+	for _, arg := range args {
+		if !allMayBeNull {
+			break
+		}
+		current := normalizeStaticType(arg)
+		nonNull := staticWithoutNull(current)
+		if !staticTypeIsEmpty(nonNull) {
+			result = staticUnion(result, nonNull)
+		}
+		if !current.includes(staticMaskNull) {
+			allMayBeNull = false
+			break
+		}
+	}
+	if allMayBeNull {
+		result = staticUnion(result, staticNullTypeValue)
+	}
+	if result == nil {
+		return staticNullTypeValue
+	}
+	return normalizeStaticType(result)
 }
 
 func staticTypeFromLiteral(value interface{}) *staticType {
@@ -806,6 +1046,46 @@ func staticArrayOf(items *staticType) *staticType {
 		mask:  staticMaskArray,
 		array: &staticArrayType{items: normalizeStaticType(items)},
 	}
+}
+
+func staticNullable(typ *staticType) *staticType {
+	current := normalizeStaticType(typ)
+	if current.includes(staticMaskNull) {
+		return current
+	}
+	return staticUnion(current, staticNullTypeValue)
+}
+
+func staticWithoutNull(typ *staticType) *staticType {
+	current := normalizeStaticType(typ)
+	if !current.includes(staticMaskNull) {
+		return current
+	}
+	mask := current.mask &^ staticMaskNull
+	result := &staticType{
+		mask:       mask,
+		object:     current.object,
+		array:      current.array,
+		constValue: current.constValue,
+		enumValues: current.enumValues,
+	}
+	if mask&staticMaskObject == 0 {
+		result.object = nil
+	}
+	if mask&staticMaskArray == 0 {
+		result.array = nil
+	}
+	// Constraints are only sound for exact scalar types.
+	if mask == 0 || mask&(mask-1) != 0 || mask&(staticMaskObject|staticMaskArray) != 0 {
+		result.constValue = nil
+		result.enumValues = nil
+	}
+	return result
+}
+
+func staticTypeIsEmpty(typ *staticType) bool {
+	current := normalizeStaticType(typ)
+	return current.mask == 0
 }
 
 func staticOpenObject() *staticType {
@@ -840,13 +1120,66 @@ func staticUnion(left, right *staticType) *staticType {
 	l := normalizeStaticType(left)
 	r := normalizeStaticType(right)
 	union := &staticType{mask: l.mask | r.mask}
-	if union.mask == staticMaskArray && l.array != nil && r.array != nil {
-		union.array = &staticArrayType{items: staticUnion(l.array.itemType(), r.array.itemType())}
+	if union.mask&staticMaskArray != 0 {
+		switch {
+		case l.includes(staticMaskArray) && r.includes(staticMaskArray):
+			if l.array != nil && r.array != nil {
+				union.array = &staticArrayType{items: staticUnion(l.array.itemType(), r.array.itemType())}
+			}
+		case l.includes(staticMaskArray):
+			union.array = l.array
+		case r.includes(staticMaskArray):
+			union.array = r.array
+		}
 	}
-	if union.mask == staticMaskObject && l.object != nil && r.object != nil && l.object == r.object {
-		union.object = l.object
+	if union.mask&staticMaskObject != 0 {
+		switch {
+		case l.includes(staticMaskObject) && r.includes(staticMaskObject):
+			if l.object != nil && r.object != nil && l.object == r.object {
+				union.object = l.object
+			}
+		case l.includes(staticMaskObject):
+			union.object = l.object
+		case r.includes(staticMaskObject):
+			union.object = r.object
+		}
 	}
+	union.constValue, union.enumValues = unionScalarConstraints(l, r, union.mask)
 	return union
+}
+
+func unionScalarConstraints(left, right *staticType, unionMask staticTypeMask) (*scalarLiteral, *scalarLiteralSet) {
+	if unionMask&(staticMaskObject|staticMaskArray) != 0 {
+		return nil, nil
+	}
+	if left.mask == staticMaskNull {
+		return right.constValue, right.enumValues
+	}
+	if right.mask == staticMaskNull {
+		return left.constValue, left.enumValues
+	}
+	if left.constValue != nil && right.constValue != nil && left.constValue.equals(*right.constValue) {
+		return left.constValue, nil
+	}
+	if left.enumValues != nil && right.enumValues != nil && scalarLiteralSetsEqual(left.enumValues, right.enumValues) {
+		return nil, left.enumValues
+	}
+	return nil, nil
+}
+
+func scalarLiteralSetsEqual(left, right *scalarLiteralSet) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	if len(left.values) != len(right.values) {
+		return false
+	}
+	for _, value := range left.values {
+		if !right.contains(value) {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeStaticType(typ *staticType) *staticType {
@@ -888,6 +1221,14 @@ func (t *staticObjectType) valuesType() *staticType {
 		return staticAnyTypeValue
 	}
 	return merged
+}
+
+func (t *staticObjectType) isRequired(name string) bool {
+	if t == nil || len(t.required) == 0 {
+		return false
+	}
+	_, exists := t.required[name]
+	return exists
 }
 
 func (a *schemaAnalyzer) analyzeMultiSelectList(node ASTNode, input *staticType) (*staticType, error) {

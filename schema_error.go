@@ -13,6 +13,7 @@ const (
 	staticErrUnknownFunction      = "unknown_function"
 	staticErrInvalidFuncArity     = "invalid_function_arity"
 	staticErrInvalidFuncArgType   = "invalid_function_arg_type"
+	staticErrUnsafeOptionalArg    = "unsafe_optional_argument"
 	staticErrUnverifiableType     = "unverifiable_type"
 	staticErrInvalidEnumValue     = "invalid_enum_value"
 )

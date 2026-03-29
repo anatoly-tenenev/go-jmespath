@@ -27,7 +27,7 @@ func TestInferTypeWithCompiledSchemaSuccessCases(t *testing.T) {
 		{
 			expression: "items[0].price",
 			assertType: func(a *assert.Assertions, typ *InferredType) {
-				a.Equal(TypeNumber, typ.Mask)
+				a.Equal(TypeNumber|TypeNull, typ.Mask)
 			},
 		},
 		{
@@ -56,7 +56,7 @@ func TestInferTypeWithCompiledSchemaSuccessCases(t *testing.T) {
 			assertType: func(a *assert.Assertions, typ *InferredType) {
 				a.Equal(TypeArray, typ.Mask)
 				a.NotNil(typ.Item)
-				a.Equal(TypeNumber, typ.Item.Mask)
+				a.Equal(TypeNumber|TypeNull, typ.Item.Mask)
 			},
 		},
 		{
@@ -64,7 +64,7 @@ func TestInferTypeWithCompiledSchemaSuccessCases(t *testing.T) {
 			assertType: func(a *assert.Assertions, typ *InferredType) {
 				a.Equal(TypeArray, typ.Mask)
 				a.NotNil(typ.Item)
-				a.Equal(TypeString, typ.Item.Mask)
+				a.Equal(TypeString|TypeNull, typ.Item.Mask)
 			},
 		},
 		{
@@ -72,7 +72,7 @@ func TestInferTypeWithCompiledSchemaSuccessCases(t *testing.T) {
 			assertType: func(a *assert.Assertions, typ *InferredType) {
 				a.Equal(TypeArray, typ.Mask)
 				a.NotNil(typ.Item)
-				a.Equal(TypeString|TypeNumber, typ.Item.Mask)
+				a.Equal(TypeString|TypeNumber|TypeNull, typ.Item.Mask)
 			},
 		},
 		{
@@ -82,11 +82,23 @@ func TestInferTypeWithCompiledSchemaSuccessCases(t *testing.T) {
 				a.False(typ.OpenObject)
 				a.Len(typ.Properties, 2)
 				a.Equal(TypeString, typ.Properties["name"].Mask)
-				a.Equal(TypeNumber, typ.Properties["price"].Mask)
+				a.Equal(TypeNumber|TypeNull, typ.Properties["price"].Mask)
 			},
 		},
 		{
 			expression: "length(name)",
+			assertType: func(a *assert.Assertions, typ *InferredType) {
+				a.Equal(TypeNumber, typ.Mask)
+			},
+		},
+		{
+			expression: "to_number(name)",
+			assertType: func(a *assert.Assertions, typ *InferredType) {
+				a.Equal(TypeNumber|TypeNull, typ.Mask)
+			},
+		},
+		{
+			expression: "to_number(count)",
 			assertType: func(a *assert.Assertions, typ *InferredType) {
 				a.Equal(TypeNumber, typ.Mask)
 			},
@@ -104,7 +116,19 @@ func TestInferTypeWithCompiledSchemaSuccessCases(t *testing.T) {
 			},
 		},
 		{
-			expression: "max_by(items, &price)",
+			expression: "max(numbers)",
+			assertType: func(a *assert.Assertions, typ *InferredType) {
+				a.Equal(TypeNumber|TypeNull, typ.Mask)
+			},
+		},
+		{
+			expression: "min(labels)",
+			assertType: func(a *assert.Assertions, typ *InferredType) {
+				a.Equal(TypeString|TypeNull, typ.Mask)
+			},
+		},
+		{
+			expression: "max_by(items, &not_null(price, `0`))",
 			assertType: func(a *assert.Assertions, typ *InferredType) {
 				a.Equal(TypeObject, typ.Mask)
 				a.False(typ.OpenObject)
@@ -112,7 +136,7 @@ func TestInferTypeWithCompiledSchemaSuccessCases(t *testing.T) {
 			},
 		},
 		{
-			expression: "sort_by(items, &price)",
+			expression: "sort_by(items, &not_null(price, `0`))",
 			assertType: func(a *assert.Assertions, typ *InferredType) {
 				a.Equal(TypeArray, typ.Mask)
 				a.NotNil(typ.Item)
@@ -124,13 +148,13 @@ func TestInferTypeWithCompiledSchemaSuccessCases(t *testing.T) {
 			assertType: func(a *assert.Assertions, typ *InferredType) {
 				a.Equal(TypeArray, typ.Mask)
 				a.NotNil(typ.Item)
-				a.Equal(TypeNumber, typ.Item.Mask)
+				a.Equal(TypeNumber|TypeNull, typ.Item.Mask)
 			},
 		},
 		{
 			expression: "name || items[0].price",
 			assertType: func(a *assert.Assertions, typ *InferredType) {
-				a.Equal(TypeString|TypeNumber, typ.Mask)
+				a.Equal(TypeString|TypeNumber|TypeNull, typ.Mask)
 			},
 		},
 		{
@@ -256,6 +280,85 @@ func TestInferTypeWithCompiledSchemaNil(t *testing.T) {
 	var staticErr *StaticError
 	a.ErrorAs(err, &staticErr)
 	a.Equal(staticErrUnsupportedSchema, staticErr.Code)
+}
+
+func TestInferTypeNullableOptionalAndNotNull(t *testing.T) {
+	a := assert.New(t)
+	cs, err := CompileSchema(inferTypeNullableSchema())
+	a.NoError(err)
+	a.NotNil(cs)
+
+	tests := []struct {
+		expression string
+		assertType func(*assert.Assertions, *InferredType)
+	}{
+		{
+			expression: "required_name",
+			assertType: func(a *assert.Assertions, typ *InferredType) {
+				a.Equal(TypeString, typ.Mask)
+			},
+		},
+		{
+			expression: "optional_name",
+			assertType: func(a *assert.Assertions, typ *InferredType) {
+				a.Equal(TypeString|TypeNull, typ.Mask)
+			},
+		},
+		{
+			expression: "optional_obj",
+			assertType: func(a *assert.Assertions, typ *InferredType) {
+				a.Equal(TypeObject|TypeNull, typ.Mask)
+				a.NotNil(typ.Properties)
+				a.Equal(TypeString, typ.Properties["id"].Mask)
+			},
+		},
+		{
+			expression: "optional_numbers",
+			assertType: func(a *assert.Assertions, typ *InferredType) {
+				a.Equal(TypeArray|TypeNull, typ.Mask)
+				a.NotNil(typ.Item)
+				a.Equal(TypeNumber, typ.Item.Mask)
+			},
+		},
+		{
+			expression: "numbers[10]",
+			assertType: func(a *assert.Assertions, typ *InferredType) {
+				a.Equal(TypeNumber|TypeNull, typ.Mask)
+			},
+		},
+		{
+			expression: "not_null(optional_name, '')",
+			assertType: func(a *assert.Assertions, typ *InferredType) {
+				a.Equal(TypeString, typ.Mask)
+			},
+		},
+		{
+			expression: "not_null(optional_numbers, numbers)",
+			assertType: func(a *assert.Assertions, typ *InferredType) {
+				a.Equal(TypeArray, typ.Mask)
+				a.NotNil(typ.Item)
+				a.Equal(TypeNumber, typ.Item.Mask)
+			},
+		},
+		{
+			expression: "not_null(required_name, optional_numbers)",
+			assertType: func(a *assert.Assertions, typ *InferredType) {
+				a.Equal(TypeString, typ.Mask)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.expression, func(t *testing.T) {
+			subAssert := assert.New(t)
+			typ, inferErr := InferTypeWithCompiledSchema(tt.expression, cs)
+			subAssert.NoError(inferErr)
+			if !subAssert.NotNil(typ) {
+				return
+			}
+			tt.assertType(subAssert, typ)
+		})
+	}
 }
 
 func TestInferredTypeIsXStrictChecks(t *testing.T) {
@@ -415,7 +518,16 @@ func inferTypeTestSchema() JSONSchema {
 		"type": "object",
 		"properties": map[string]interface{}{
 			"name":   map[string]interface{}{"type": "string"},
+			"count":  map[string]interface{}{"type": "number"},
 			"values": map[string]interface{}{"type": "array"},
+			"numbers": map[string]interface{}{
+				"type":  "array",
+				"items": map[string]interface{}{"type": "number"},
+			},
+			"labels": map[string]interface{}{
+				"type":  "array",
+				"items": map[string]interface{}{"type": "string"},
+			},
 			"items": map[string]interface{}{
 				"type": "array",
 				"items": map[string]interface{}{
@@ -455,6 +567,45 @@ func inferTypeTestSchema() JSONSchema {
 				"const": "USD",
 			},
 		},
+		"required":             []interface{}{"name", "count", "values", "numbers", "labels", "items", "openObj", "closedObj", "status", "currency"},
+		"additionalProperties": false,
+	}
+}
+
+func inferTypeNullableSchema() JSONSchema {
+	return JSONSchema{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"required_name": map[string]interface{}{
+				"type": "string",
+			},
+			"optional_name": map[string]interface{}{
+				"type": "string",
+			},
+			"numbers": map[string]interface{}{
+				"type": "array",
+				"items": map[string]interface{}{
+					"type": "number",
+				},
+			},
+			"optional_numbers": map[string]interface{}{
+				"type": "array",
+				"items": map[string]interface{}{
+					"type": "number",
+				},
+			},
+			"optional_obj": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"id": map[string]interface{}{
+						"type": "string",
+					},
+				},
+				"required":             []interface{}{"id"},
+				"additionalProperties": false,
+			},
+		},
+		"required":             []interface{}{"required_name", "numbers"},
 		"additionalProperties": false,
 	}
 }

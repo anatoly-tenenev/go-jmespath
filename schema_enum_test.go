@@ -122,6 +122,7 @@ func enumAwareTestSchema() JSONSchema {
 				"type": "string",
 			},
 		},
+		"required":             []interface{}{"status", "priority", "enabled", "tags", "title", "name"},
 		"additionalProperties": false,
 	}
 }

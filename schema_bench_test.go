@@ -59,7 +59,7 @@ func BenchmarkCompileWithSchema_ReparsePenalty(b *testing.B) {
 }
 
 func BenchmarkInferTypeWithCompiledSchema_Scalar(b *testing.B) {
-	schema := compileTestSchema()
+	schema := compileTestSchemaWithRequired("name")
 	cs, err := CompileSchema(schema)
 	if err != nil {
 		b.Fatalf("CompileSchema failed: %v", err)
@@ -75,7 +75,7 @@ func BenchmarkInferTypeWithCompiledSchema_Scalar(b *testing.B) {
 }
 
 func BenchmarkInferTypeWithCompiledSchema_ProjectionFunction(b *testing.B) {
-	schema := compileTestSchema()
+	schema := compileTestSchemaWithRequired("items")
 	cs, err := CompileSchema(schema)
 	if err != nil {
 		b.Fatalf("CompileSchema failed: %v", err)
@@ -83,7 +83,7 @@ func BenchmarkInferTypeWithCompiledSchema_ProjectionFunction(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := InferTypeWithCompiledSchema("sort_by(items, &price)[].price", cs)
+		_, err := InferTypeWithCompiledSchema("sort_by(items, &not_null(price, `0`))[].price", cs)
 		if err != nil {
 			b.Fatalf("InferTypeWithCompiledSchema failed: %v", err)
 		}

@@ -2,6 +2,7 @@ package jmespath
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -60,7 +61,7 @@ func newGuardAnalysis(paths guardPathSet) *GuardAnalysis {
 
 func (a *guardAnalyzer) analyzeWhenTrue(node ASTNode) guardPathSet {
 	switch node.nodeType {
-	case ASTField, ASTSubexpression:
+	case ASTField, ASTSubexpression, ASTIndexExpression:
 		return guardPathSetFromPathNode(node)
 	case ASTAndExpression:
 		if len(node.children) != 2 {
@@ -193,63 +194,103 @@ func guardPathSetFromComparatorWhenTrue(node ASTNode) guardPathSet {
 }
 
 func guardPathSetFromPathNode(node ASTNode) guardPathSet {
-	segments, ok := guardPathSegments(node)
-	if !ok || len(segments) == 0 {
+	path, ok := narrowableSchemaPath(node)
+	if !ok || path == "" || path == "@" {
 		return nil
 	}
-	paths := make(guardPathSet, len(segments))
-	addGuardPathAndPrefixes(paths, segments)
+	paths := guardPathPrefixes(path)
+	if len(paths) == 0 {
+		return nil
+	}
 	return paths
 }
 
-func guardPathSegments(node ASTNode) ([]string, bool) {
+func narrowableSchemaPath(node ASTNode) (string, bool) {
 	switch node.nodeType {
 	case ASTField:
 		name, ok := node.value.(string)
-		if !ok || !isGuardPathSegment(name) {
-			return nil, false
+		if !ok || !isNarrowableFieldName(name) {
+			return "", false
 		}
-		return []string{name}, true
+		return name, true
 	case ASTSubexpression:
 		if len(node.children) != 2 {
-			return nil, false
+			return "", false
 		}
-		left, ok := guardPathSegments(node.children[0])
+		leftPath, ok := narrowableSchemaPath(node.children[0])
 		if !ok {
-			return nil, false
+			return "", false
 		}
-		right, ok := guardPathSegments(node.children[1])
+		rightPath, ok := narrowableSchemaPath(node.children[1])
 		if !ok {
-			return nil, false
+			return "", false
 		}
-		combined := make([]string, 0, len(left)+len(right))
-		combined = append(combined, left...)
-		combined = append(combined, right...)
-		return combined, true
+		if leftPath == "@" {
+			return rightPath, true
+		}
+		if rightPath == "@" {
+			return leftPath, true
+		}
+		return leftPath + "." + rightPath, true
+	case ASTIndexExpression:
+		if len(node.children) != 2 {
+			return "", false
+		}
+		basePath, ok := narrowableSchemaPath(node.children[0])
+		if !ok {
+			return "", false
+		}
+		indexNode := node.children[1]
+		switch indexNode.nodeType {
+		case ASTIndex:
+			index, ok := indexNode.value.(int)
+			if !ok {
+				return "", false
+			}
+			return basePath + "[" + strconv.Itoa(index) + "]", true
+		case ASTSlice:
+			return basePath + "[]", true
+		default:
+			return "", false
+		}
 	case ASTIdentity, ASTCurrentNode:
-		return []string{}, true
+		return "@", true
 	default:
-		return nil, false
+		return "", false
 	}
 }
 
-func isGuardPathSegment(name string) bool {
+func isNarrowableFieldName(name string) bool {
 	if name == "" {
 		return false
 	}
 	return !strings.ContainsAny(name, ".[]")
 }
 
-func addGuardPathAndPrefixes(paths guardPathSet, segments []string) {
+func guardPathPrefixes(path string) guardPathSet {
+	if path == "" || path == "@" {
+		return nil
+	}
+	paths := make(guardPathSet)
 	prefix := ""
-	for i, segment := range segments {
-		if i == 0 {
-			prefix = segment
-		} else {
-			prefix += "." + segment
+	for i := 0; i < len(path); i++ {
+		ch := path[i]
+		switch ch {
+		case '.':
+			if prefix != "" {
+				paths[prefix] = struct{}{}
+			}
+		case '[':
+			if prefix != "" {
+				paths[prefix] = struct{}{}
+			}
 		}
+		prefix += string(ch)
+	}
+	if prefix != "" {
 		paths[prefix] = struct{}{}
 	}
+	return paths
 }
 
 func unionGuardPathSets(left, right guardPathSet) guardPathSet {

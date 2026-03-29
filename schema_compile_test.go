@@ -8,7 +8,7 @@ import (
 
 func TestCompileWithCompiledSchemaReuse(t *testing.T) {
 	assert := assert.New(t)
-	schema := compileTestSchema()
+	schema := compileTestSchemaWithRequired("name")
 	cs, err := CompileSchema(schema)
 	assert.NoError(err)
 	assert.NotNil(cs)
@@ -39,6 +39,6 @@ func TestMustCompileWithSchemaPanics(t *testing.T) {
 		r := recover()
 		assert.NotNil(t, r)
 	}()
-	schema := compileTestSchema()
+	schema := compileTestSchemaWithRequired("name")
 	MustCompileWithSchema("foo.unknown", schema)
 }

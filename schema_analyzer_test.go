@@ -8,14 +8,15 @@ import (
 
 func TestCompileWithSchemaSuccessCases(t *testing.T) {
 	assert := assert.New(t)
-	schema := compileTestSchema()
+	schema := compileTestSchemaWithRequired("name", "items")
 	expressions := []string{
 		"foo.bar.baz[2]",
 		"items[].price",
 		"length(name)",
-		"max_by(items, &price)",
-		"length(items[3].name)",
-		"contains(items[3].name, 'foo')",
+		"max_by(items, &not_null(price, `0`))",
+		"items[3].name && length(items[3].name)",
+		"items[3].name && contains(items[3].name, 'foo')",
+		"contains(not_null(items[3].name, ''), 'foo')",
 	}
 
 	for _, expression := range expressions {
@@ -27,7 +28,7 @@ func TestCompileWithSchemaSuccessCases(t *testing.T) {
 
 func TestCompileWithSchemaErrors(t *testing.T) {
 	assert := assert.New(t)
-	schema := compileTestSchema()
+	schema := compileTestSchemaWithRequired("name")
 	tests := []struct {
 		expression string
 		code       string
@@ -121,4 +122,48 @@ func TestCompileWithSchemaOptionalPropertyCompiles(t *testing.T) {
 
 	_, err := CompileWithSchema("optional", schema)
 	assert.NoError(err)
+}
+
+func TestCompileWithSchemaNullableAwareness(t *testing.T) {
+	assert := assert.New(t)
+	schema := functionNullableSafetySchema()
+
+	compileCases := []string{
+		"content.sections.summary",
+		"optional_path == 'x'",
+		"optional_path != 'x'",
+		"optional_path || 'fallback'",
+		"optional_number > `4`",
+		"not_null('fallback', contains(meta.title, 'x'))",
+	}
+	for _, expression := range compileCases {
+		jp, err := CompileWithSchema(expression, schema)
+		assert.NoError(err, expression)
+		assert.NotNil(jp, expression)
+	}
+
+	errorCases := []struct {
+		expression string
+		code       string
+	}{
+		{expression: "contains(content.sections.summary, 'retry')", code: staticErrUnsafeOptionalArg},
+		{expression: "length(meta.title)", code: staticErrUnsafeOptionalArg},
+		{expression: "not_null(optional_path, contains(meta.title, 'x'))", code: staticErrUnsafeOptionalArg},
+	}
+	for _, tt := range errorCases {
+		_, err := CompileWithSchema(tt.expression, schema)
+		assert.Error(err, tt.expression)
+		var staticErr *StaticError
+		assert.ErrorAs(err, &staticErr, tt.expression)
+		assert.Equal(tt.code, staticErr.Code, tt.expression)
+	}
+}
+
+func TestCompileWithSchemaQuotedIdentifierDoesNotNarrowOtherPaths(t *testing.T) {
+	assert := assert.New(t)
+	_, err := CompileWithSchema("\"a.b\" && contains(a.c, 'x')", guardQuotedIdentifierSchema())
+	assert.Error(err)
+	var staticErr *StaticError
+	assert.ErrorAs(err, &staticErr)
+	assert.Equal(staticErrUnsafeOptionalArg, staticErr.Code)
 }

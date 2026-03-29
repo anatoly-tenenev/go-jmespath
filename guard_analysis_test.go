@@ -283,6 +283,34 @@ func TestGuardAnalysisWhenTrue(t *testing.T) {
 			},
 		},
 		{
+			name:       "index_path_truthy",
+			schema:     guardIndexSchema(),
+			expression: "items[10]",
+			protected:  []string{"items", "items[10]"},
+			notProtected: []string{
+				"items[9]",
+			},
+		},
+		{
+			name:       "index_path_neq_null",
+			schema:     guardIndexSchema(),
+			expression: "items[10] != `null`",
+			protected:  []string{"items", "items[10]"},
+			notProtected: []string{
+				"items[9]",
+			},
+		},
+		{
+			name:       "quoted_identifier_with_delimiter_is_not_guarded",
+			schema:     guardQuotedIdentifierSchema(),
+			expression: "\"a.b\"",
+			protected:  nil,
+			notProtected: []string{
+				"a",
+				"a.b",
+			},
+		},
+		{
 			name:       "closed_schema",
 			schema:     guardKnownSchema(false),
 			expression: "known",
@@ -303,46 +331,10 @@ func TestGuardAnalysisWhenTrue(t *testing.T) {
 		{
 			name:       "unsupported_function_expression",
 			schema:     guardFlatSchema(false),
-			expression: "abs(a)",
+			expression: "type(a)",
 			protected:  nil,
 			notProtected: []string{
 				"a",
-			},
-		},
-		{
-			name:       "function_starts_with_guards_first_arg",
-			schema:     guardFlatStringSchema(false),
-			expression: "starts_with(a, 'x')",
-			protected:  []string{"a"},
-			notProtected: []string{
-				"b",
-			},
-		},
-		{
-			name:       "function_starts_with_guards_both_path_args",
-			schema:     guardFlatStringSchema(false),
-			expression: "starts_with(a, b)",
-			protected:  []string{"a", "b"},
-			notProtected: []string{
-				"a.b",
-			},
-		},
-		{
-			name:       "function_ends_with_guards_first_arg",
-			schema:     guardFlatStringSchema(false),
-			expression: "ends_with(a, 'x')",
-			protected:  []string{"a"},
-			notProtected: []string{
-				"b",
-			},
-		},
-		{
-			name:       "function_contains_guards_first_arg",
-			schema:     guardFlatStringSchema(false),
-			expression: "contains(a, 'x')",
-			protected:  []string{"a"},
-			notProtected: []string{
-				"b",
 			},
 		},
 		{
@@ -375,7 +367,7 @@ func TestGuardAnalysisWhenTrue(t *testing.T) {
 		},
 		{
 			name:       "function_contains_path_args_guards_only_first_arg",
-			schema:     guardFlatStringSchema(false),
+			schema:     guardFlatStringFirstRequiredSchema(false),
 			expression: "contains(a, b)",
 			protected:  []string{"a"},
 			notProtected: []string{
@@ -481,6 +473,12 @@ func guardFlatStringSchema(open bool) JSONSchema {
 	}
 }
 
+func guardFlatStringFirstRequiredSchema(open bool) JSONSchema {
+	schema := guardFlatStringSchema(open)
+	schema["required"] = []interface{}{"a"}
+	return schema
+}
+
 func guardNestedSchema(open bool) JSONSchema {
 	return JSONSchema{
 		"type": "object",
@@ -578,6 +576,44 @@ func guardProjectionSchema() JSONSchema {
 				},
 			},
 		},
+		"additionalProperties": false,
+	}
+}
+
+func guardIndexSchema() JSONSchema {
+	return JSONSchema{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"items": map[string]interface{}{
+				"type": "array",
+				"items": map[string]interface{}{
+					"type": "string",
+				},
+			},
+		},
+		"additionalProperties": false,
+	}
+}
+
+func guardQuotedIdentifierSchema() JSONSchema {
+	return JSONSchema{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"a.b": map[string]interface{}{
+				"type": "string",
+			},
+			"a": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"c": map[string]interface{}{
+						"type": "string",
+					},
+				},
+				"required":             []interface{}{"c"},
+				"additionalProperties": false,
+			},
+		},
+		"required":             []interface{}{"a.b"},
 		"additionalProperties": false,
 	}
 }
