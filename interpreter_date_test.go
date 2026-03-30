@@ -6,208 +6,208 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestSchemaAwareDateComparatorRuntime(t *testing.T) {
-	assert := assert.New(t)
-	jp, err := CompileWithSchema("createdDate >= '2026-03-01'", schemaWithDateFields())
-	assert.NoError(err)
-	if !assert.NotNil(jp) {
-		return
-	}
-
-	result, err := jp.Search(map[string]interface{}{"createdDate": "2026-03-05"})
-	assert.NoError(err)
-	assert.Equal(true, result)
-
-	result, err = jp.Search(map[string]interface{}{"createdDate": "2026-02-27"})
-	assert.NoError(err)
-	assert.Equal(false, result)
-}
-
-func TestSchemaAwareDateFieldToFieldComparatorRuntime(t *testing.T) {
-	assert := assert.New(t)
-	jp, err := CompileWithSchema("createdDate < otherDate", schemaWithDateFields())
-	assert.NoError(err)
-	if !assert.NotNil(jp) {
-		return
-	}
-
-	result, err := jp.Search(map[string]interface{}{
-		"createdDate": "2026-03-01",
-		"otherDate":   "2026-03-02",
-	})
-	assert.NoError(err)
-	assert.Equal(true, result)
-
-	result, err = jp.Search(map[string]interface{}{
-		"createdDate": "2026-03-03",
-		"otherDate":   "2026-03-02",
-	})
-	assert.NoError(err)
-	assert.Equal(false, result)
-}
-
-func TestSchemaAwareDateComparatorRuntimeWithNotNullDateFallback(t *testing.T) {
-	assert := assert.New(t)
-	jp, err := CompileWithSchema("not_null(createdDate, '2026-03-01') < otherDate", dateFieldSchemaWithRequired("otherDate"))
-	assert.NoError(err)
-	if !assert.NotNil(jp) {
-		return
-	}
-
-	result, err := jp.Search(map[string]interface{}{
-		"otherDate": "2026-03-02",
-	})
-	assert.NoError(err)
-	assert.Equal(true, result)
-
-	result, err = jp.Search(map[string]interface{}{
-		"createdDate": "2026-03-03",
-		"otherDate":   "2026-03-02",
-	})
-	assert.NoError(err)
-	assert.Equal(false, result)
-}
-
-func TestSchemaAwareDateComparatorRuntimeWithLiteralFirstOrDateFallback(t *testing.T) {
-	assert := assert.New(t)
-	jp, err := CompileWithSchema("('2026-03-01' || createdDate) < otherDate", dateFieldSchemaWithRequired("otherDate"))
-	assert.NoError(err)
-	if !assert.NotNil(jp) {
-		return
-	}
-
-	result, err := jp.Search(map[string]interface{}{
-		"otherDate": "2026-03-02",
-	})
-	assert.NoError(err)
-	assert.Equal(true, result)
-
-	result, err = jp.Search(map[string]interface{}{
-		"createdDate": "2026-03-03",
-		"otherDate":   "2026-03-02",
-	})
-	assert.NoError(err)
-	assert.Equal(true, result)
-}
-
-func TestSchemaAwareDateComparatorRuntimeInFilter(t *testing.T) {
-	assert := assert.New(t)
-	jp, err := CompileWithSchema("items[?createdDate >= '2026-03-01']", benchmarkLiteralDateArraySchema())
-	assert.NoError(err)
-	if !assert.NotNil(jp) {
-		return
-	}
-
-	result, err := jp.Search(map[string]interface{}{
-		"items": []interface{}{
-			map[string]interface{}{"createdDate": "2026-02-27"},
-			map[string]interface{}{"createdDate": "2026-03-05"},
-		},
-	})
-	assert.NoError(err)
-	assert.Equal([]interface{}{
-		map[string]interface{}{"createdDate": "2026-03-05"},
-	}, result)
-}
-
-func TestSchemaAwareDateComparatorPrecomputesLiteralDates(t *testing.T) {
-	assert := assert.New(t)
-
+func TestDateComparatorRuntime(t *testing.T) {
 	tests := []struct {
+		name       string
+		expression string
+		schema     JSONSchema
+		input      map[string]interface{}
+		expected   interface{}
+	}{
+		{
+			name:       "literal comparator matches newer date",
+			expression: "createdDate >= '2026-03-01'",
+			schema:     schemaWithDateFields(),
+			input:      map[string]interface{}{"createdDate": "2026-03-05"},
+			expected:   true,
+		},
+		{
+			name:       "literal comparator rejects older date",
+			expression: "createdDate >= '2026-03-01'",
+			schema:     schemaWithDateFields(),
+			input:      map[string]interface{}{"createdDate": "2026-02-27"},
+			expected:   false,
+		},
+		{
+			name:       "field comparator matches ordered dates",
+			expression: "createdDate < otherDate",
+			schema:     schemaWithDateFields(),
+			input: map[string]interface{}{
+				"createdDate": "2026-03-01",
+				"otherDate":   "2026-03-02",
+			},
+			expected: true,
+		},
+		{
+			name:       "field comparator rejects reversed dates",
+			expression: "createdDate < otherDate",
+			schema:     schemaWithDateFields(),
+			input: map[string]interface{}{
+				"createdDate": "2026-03-03",
+				"otherDate":   "2026-03-02",
+			},
+			expected: false,
+		},
+		{
+			name:       "not_null fallback uses literal when field is missing",
+			expression: "not_null(createdDate, '2026-03-01') < otherDate",
+			schema:     dateFieldSchemaWithRequired("otherDate"),
+			input: map[string]interface{}{
+				"otherDate": "2026-03-02",
+			},
+			expected: true,
+		},
+		{
+			name:       "not_null fallback uses field value when present",
+			expression: "not_null(createdDate, '2026-03-01') < otherDate",
+			schema:     dateFieldSchemaWithRequired("otherDate"),
+			input: map[string]interface{}{
+				"createdDate": "2026-03-03",
+				"otherDate":   "2026-03-02",
+			},
+			expected: false,
+		},
+		{
+			name:       "literal-first or fallback short-circuits to literal",
+			expression: "('2026-03-01' || createdDate) < otherDate",
+			schema:     dateFieldSchemaWithRequired("otherDate"),
+			input: map[string]interface{}{
+				"otherDate": "2026-03-02",
+			},
+			expected: true,
+		},
+		{
+			name:       "literal-first or fallback ignores later field value",
+			expression: "('2026-03-01' || createdDate) < otherDate",
+			schema:     dateFieldSchemaWithRequired("otherDate"),
+			input: map[string]interface{}{
+				"createdDate": "2026-03-03",
+				"otherDate":   "2026-03-02",
+			},
+			expected: true,
+		},
+		{
+			name:       "filter keeps only matching dates",
+			expression: "items[?createdDate >= '2026-03-01']",
+			schema:     benchmarkLiteralDateArraySchema(),
+			input: map[string]interface{}{
+				"items": []interface{}{
+					map[string]interface{}{"createdDate": "2026-02-27"},
+					map[string]interface{}{"createdDate": "2026-03-05"},
+				},
+			},
+			expected: []interface{}{
+				map[string]interface{}{"createdDate": "2026-03-05"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			for _, mode := range dateCompileModes(t, tt.schema) {
+				mode := mode
+				t.Run(mode.name, func(t *testing.T) {
+					jp, err := mode.compile(tt.expression)
+					assert.NoError(t, err)
+					if !assert.NotNil(t, jp) {
+						return
+					}
+
+					result, err := jp.Search(tt.input)
+					assert.NoError(t, err)
+					assert.Equal(t, tt.expected, result)
+				})
+			}
+		})
+	}
+}
+
+func TestDateComparatorPrecomputesLiteralDates(t *testing.T) {
+	tests := []struct {
+		name       string
 		expression string
 		left       bool
 		right      bool
 	}{
-		{expression: "createdDate >= '2026-03-01'", left: false, right: true},
-		{expression: "'2026-03-01' <= createdDate", left: true, right: false},
-		{expression: "createdDate < otherDate", left: false, right: false},
+		{
+			name:       "field compared to literal on right",
+			expression: "createdDate >= '2026-03-01'",
+			left:       false,
+			right:      true,
+		},
+		{
+			name:       "literal compared to field on left",
+			expression: "'2026-03-01' <= createdDate",
+			left:       true,
+			right:      false,
+		},
+		{
+			name:       "field to field comparator has no literals",
+			expression: "createdDate < otherDate",
+			left:       false,
+			right:      false,
+		},
 	}
 
 	for _, tt := range tests {
-		jp, err := CompileWithSchema(tt.expression, schemaWithDateFields())
-		assert.NoError(err, tt.expression)
-		if !assert.NotNil(jp, tt.expression) {
-			continue
-		}
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			jp, err := CompileWithSchema(tt.expression, schemaWithDateFields())
+			assert.NoError(t, err)
+			if !assert.NotNil(t, jp) {
+				return
+			}
 
-		plan := jp.intr.comparatorPlan(jp.ast)
-		assert.Equal(orderedValueKindDate, plan.kind, tt.expression)
-		assert.Equal(tt.left, plan.leftDateLiteral != "", tt.expression)
-		assert.Equal(tt.right, plan.rightDateLiteral != "", tt.expression)
+			plan := jp.intr.comparatorPlan(jp.ast)
+			assert.Equal(t, orderedValueKindDate, plan.kind, tt.expression)
+			assert.Equal(t, tt.left, plan.leftDateLiteral != "", tt.expression)
+			assert.Equal(t, tt.right, plan.rightDateLiteral != "", tt.expression)
+		})
 	}
 }
 
-func TestSchemaAwareDateComparatorRuntimeRejectsInvalidValues(t *testing.T) {
-	assert := assert.New(t)
-	jp, err := CompileWithSchema("createdDate >= otherDate", schemaWithDateFields())
-	assert.NoError(err)
-	if !assert.NotNil(jp) {
-		return
+func TestDateComparatorRuntimeRejectsInvalidValues(t *testing.T) {
+	tests := []struct {
+		name       string
+		expression string
+		input      map[string]interface{}
+	}{
+		{
+			name:       "rejects invalid left date string",
+			expression: "createdDate >= otherDate",
+			input: map[string]interface{}{
+				"createdDate": "draft",
+				"otherDate":   "2026-03-02",
+			},
+		},
+		{
+			name:       "rejects nil right date",
+			expression: "createdDate >= otherDate",
+			input: map[string]interface{}{
+				"createdDate": "2026-03-01",
+				"otherDate":   nil,
+			},
+		},
 	}
 
-	_, err = jp.Search(map[string]interface{}{
-		"createdDate": "draft",
-		"otherDate":   "2026-03-02",
-	})
-	assert.Error(err)
-	assert.Contains(err.Error(), "invalid-type")
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			for _, mode := range dateCompileModes(t, schemaWithDateFields()) {
+				mode := mode
+				t.Run(mode.name, func(t *testing.T) {
+					jp, err := mode.compile(tt.expression)
+					assert.NoError(t, err)
+					if !assert.NotNil(t, jp) {
+						return
+					}
 
-	_, err = jp.Search(map[string]interface{}{
-		"createdDate": "2026-03-01",
-		"otherDate":   nil,
-	})
-	assert.Error(err)
-	assert.Contains(err.Error(), "invalid-type")
-}
-
-func TestCompiledSchemaDateComparatorRuntime(t *testing.T) {
-	assert := assert.New(t)
-	cs, err := CompileSchema(schemaWithDateFields())
-	assert.NoError(err)
-	if !assert.NotNil(cs) {
-		return
+					_, err = jp.Search(tt.input)
+					assert.Error(t, err)
+					assert.Contains(t, err.Error(), "invalid-type")
+				})
+			}
+		})
 	}
-
-	jp, err := CompileWithCompiledSchema("createdDate >= '2026-03-01'", cs)
-	assert.NoError(err)
-	if !assert.NotNil(jp) {
-		return
-	}
-
-	result, err := jp.Search(map[string]interface{}{"createdDate": "2026-03-05"})
-	assert.NoError(err)
-	assert.Equal(true, result)
-
-	result, err = jp.Search(map[string]interface{}{"createdDate": "2026-02-27"})
-	assert.NoError(err)
-	assert.Equal(false, result)
-}
-
-func TestCompiledSchemaDateComparatorRuntimeRejectsInvalidValues(t *testing.T) {
-	assert := assert.New(t)
-	cs, err := CompileSchema(schemaWithDateFields())
-	assert.NoError(err)
-	if !assert.NotNil(cs) {
-		return
-	}
-
-	jp, err := CompileWithCompiledSchema("createdDate >= otherDate", cs)
-	assert.NoError(err)
-	if !assert.NotNil(jp) {
-		return
-	}
-
-	_, err = jp.Search(map[string]interface{}{
-		"createdDate": "draft",
-		"otherDate":   "2026-03-02",
-	})
-	assert.Error(err)
-	assert.Contains(err.Error(), "invalid-type")
-
-	_, err = jp.Search(map[string]interface{}{
-		"createdDate": "2026-03-01",
-		"otherDate":   nil,
-	})
-	assert.Error(err)
-	assert.Contains(err.Error(), "invalid-type")
 }

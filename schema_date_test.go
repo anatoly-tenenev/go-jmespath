@@ -45,60 +45,74 @@ func dateFieldSchemaWithRequired(requiredFields ...string) JSONSchema {
 	return schema
 }
 
-func TestCompileSchemaSupportsStringDateFormat(t *testing.T) {
-	assert := assert.New(t)
+type dateCompileMode struct {
+	name    string
+	compile func(string) (*JMESPath, error)
+}
 
+type dateCompileExpectation struct {
+	expression string
+	code       string
+}
+
+func compileDateSchema(t *testing.T, schema JSONSchema) *CompiledSchema {
+	t.Helper()
+
+	cs, err := CompileSchema(schema)
+	if err != nil {
+		t.Fatalf("CompileSchema() unexpected error: %v", err)
+	}
+	if cs == nil {
+		t.Fatal("CompileSchema() returned nil compiled schema")
+	}
+	return cs
+}
+
+func dateCompileModes(t *testing.T, schema JSONSchema) []dateCompileMode {
+	t.Helper()
+
+	cs := compileDateSchema(t, schema)
+	return []dateCompileMode{
+		{
+			name: "CompileWithSchema",
+			compile: func(expression string) (*JMESPath, error) {
+				return CompileWithSchema(expression, schema)
+			},
+		},
+		{
+			name: "CompileWithCompiledSchema",
+			compile: func(expression string) (*JMESPath, error) {
+				return CompileWithCompiledSchema(expression, cs)
+			},
+		},
+	}
+}
+
+func assertStaticErrorCode(t *testing.T, err error, expectedCode, expression string) {
+	t.Helper()
+
+	assert.Error(t, err, expression)
+	var staticErr *StaticError
+	if !assert.ErrorAs(t, err, &staticErr, expression) {
+		return
+	}
+	assert.Equal(t, expectedCode, staticErr.Code, expression)
+}
+
+func TestCompileSchemaSupportsStringDateFormat(t *testing.T) {
 	compiled, err := CompileSchema(schemaWithDateFields())
-	assert.NoError(err)
-	if !assert.NotNil(compiled) || !assert.NotNil(compiled.root) || !assert.NotNil(compiled.staticRoot) {
+	assert.NoError(t, err)
+	if !assert.NotNil(t, compiled) || !assert.NotNil(t, compiled.root) || !assert.NotNil(t, compiled.staticRoot) {
 		return
 	}
 
 	createdDate := compiled.root.properties["createdDate"]
-	assert.NotNil(createdDate)
-	assert.Equal(stringFormatDate, createdDate.stringFormat)
+	assert.NotNil(t, createdDate)
+	assert.Equal(t, stringFormatDate, createdDate.stringFormat)
 
 	staticCreatedDate := compiled.staticRoot.object.properties["createdDate"]
-	assert.NotNil(staticCreatedDate)
-	assert.Equal(stringFormatDate, staticCreatedDate.stringFormat)
-}
-
-func TestCompileSchemaInfersStringTypeForDateFormatFromConstraints(t *testing.T) {
-	assert := assert.New(t)
-
-	tests := []struct {
-		name   string
-		schema JSONSchema
-	}{
-		{
-			name: "const",
-			schema: JSONSchema{
-				"format": "date",
-				"const":  "2026-03-01",
-			},
-		},
-		{
-			name: "enum",
-			schema: JSONSchema{
-				"format": "date",
-				"enum":   []interface{}{"2026-03-01", "2026-03-02"},
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			compiled, err := CompileSchema(tt.schema)
-			assert.NoError(err)
-			if !assert.NotNil(compiled) || !assert.NotNil(compiled.root) || !assert.NotNil(compiled.staticRoot) {
-				return
-			}
-
-			assert.Equal(schemaKindString, compiled.root.kind)
-			assert.Equal(stringFormatDate, compiled.root.stringFormat)
-			assert.Equal(stringFormatDate, compiled.staticRoot.stringFormat)
-		})
-	}
+	assert.NotNil(t, staticCreatedDate)
+	assert.Equal(t, stringFormatDate, staticCreatedDate.stringFormat)
 }
 
 func TestCompileSchemaRejectsUnsupportedFormats(t *testing.T) {
@@ -187,11 +201,29 @@ func TestCompileSchemaRejectsUnsupportedFormats(t *testing.T) {
 	}
 }
 
-func TestCompileSchemaRejectsInvalidDateConstAndEnum(t *testing.T) {
+func TestCompileSchemaDateFormatConstraints(t *testing.T) {
 	tests := []struct {
-		name   string
-		schema JSONSchema
+		name            string
+		schema          JSONSchema
+		valid           bool
+		expectedKeyword string
 	}{
+		{
+			name: "valid date const",
+			schema: JSONSchema{
+				"format": "date",
+				"const":  "2026-03-01",
+			},
+			valid: true,
+		},
+		{
+			name: "valid date enum",
+			schema: JSONSchema{
+				"format": "date",
+				"enum":   []interface{}{"2026-03-01", "2026-03-02"},
+			},
+			valid: true,
+		},
 		{
 			name: "invalid date const",
 			schema: JSONSchema{
@@ -199,6 +231,8 @@ func TestCompileSchemaRejectsInvalidDateConstAndEnum(t *testing.T) {
 				"format": "date",
 				"const":  "draft",
 			},
+			valid:           false,
+			expectedKeyword: "valid date",
 		},
 		{
 			name: "invalid date enum",
@@ -207,181 +241,135 @@ func TestCompileSchemaRejectsInvalidDateConstAndEnum(t *testing.T) {
 				"format": "date",
 				"enum":   []interface{}{"2026-03-01", "draft"},
 			},
+			valid:           false,
+			expectedKeyword: "valid date",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertUnsupportedSchemaCompileError(t, tt.schema, "$", "valid date")
+			if !tt.valid {
+				assertUnsupportedSchemaCompileError(t, tt.schema, "$", tt.expectedKeyword)
+				return
+			}
+
+			compiled := compileDateSchema(t, tt.schema)
+			if !assert.NotNil(t, compiled.root) || !assert.NotNil(t, compiled.staticRoot) {
+				return
+			}
+
+			assert.Equal(t, schemaKindString, compiled.root.kind)
+			assert.Equal(t, stringFormatDate, compiled.root.stringFormat)
+			assert.Equal(t, stringFormatDate, compiled.staticRoot.stringFormat)
 		})
 	}
 }
 
-func TestCompileWithSchemaDateComparators(t *testing.T) {
-	assert := assert.New(t)
-	schema := schemaWithDateFields()
-
-	successCases := []string{
-		"createdDate >= '2026-03-01'",
-		"createdDate < otherDate",
-	}
-	for _, expression := range successCases {
-		jp, err := CompileWithSchema(expression, schema)
-		assert.NoError(err, expression)
-		assert.NotNil(jp, expression)
-	}
-
-	errorCases := []struct {
-		expression string
+func TestSchemaCompileDateComparators(t *testing.T) {
+	tests := []struct {
+		name     string
+		schema   JSONSchema
+		success  []string
+		failures []dateCompileExpectation
 	}{
-		{expression: "createdDate >= 'draft'"},
-		{expression: "createdDate >= '2026-02-30'"},
-		{expression: "'2026-03-01' < '2026-03-02'"},
-		{expression: "createdDate >= status"},
-		{expression: "createdDate >= count"},
-		{expression: "createdDate >= `10`"},
+		{
+			name:   "required date fields",
+			schema: schemaWithDateFields(),
+			success: []string{
+				"createdDate >= '2026-03-01'",
+				"createdDate < otherDate",
+				"createdDate >= otherDate",
+			},
+			failures: []dateCompileExpectation{
+				{expression: "createdDate >= 'draft'", code: staticErrInvalidComparator},
+				{expression: "createdDate >= '2026-02-30'", code: staticErrInvalidComparator},
+				{expression: "'2026-03-01' < '2026-03-02'", code: staticErrInvalidComparator},
+				{expression: "createdDate >= status", code: staticErrInvalidComparator},
+				{expression: "createdDate >= count", code: staticErrInvalidComparator},
+				{expression: "createdDate >= `10`", code: staticErrInvalidComparator},
+			},
+		},
+		{
+			name:   "optional date fields require guard",
+			schema: optionalSchemaWithDateFields(),
+			success: []string{
+				"createdDate && createdDate >= '2026-03-01'",
+				"createdDate != `null` && createdDate >= '2026-03-01'",
+				"createdDate && otherDate && createdDate < otherDate",
+				"not_null(createdDate, '2026-03-01') < not_null(otherDate, '2026-03-02')",
+			},
+			failures: []dateCompileExpectation{
+				{expression: "createdDate >= '2026-03-01'", code: staticErrUnsafeOptionalArg},
+				{expression: "createdDate < otherDate", code: staticErrUnsafeOptionalArg},
+				{expression: "createdDate >= otherDate", code: staticErrUnsafeOptionalArg},
+			},
+		},
+		{
+			name:   "optional date fields allow fallbacks",
+			schema: dateFieldSchemaWithRequired("otherDate"),
+			success: []string{
+				"not_null(createdDate, '2026-03-01') < otherDate",
+				"(createdDate || '2026-03-01') < otherDate",
+				"('2026-03-01' || createdDate) < otherDate",
+				"otherDate > not_null('2026-03-01', createdDate)",
+			},
+		},
 	}
-	for _, tt := range errorCases {
-		_, err := CompileWithSchema(tt.expression, schema)
-		assert.Error(err, tt.expression)
-		var staticErr *StaticError
-		assert.ErrorAs(err, &staticErr, tt.expression)
-		assert.Equal(staticErrInvalidComparator, staticErr.Code, tt.expression)
-	}
-}
 
-func TestCompileWithSchemaOptionalDateComparatorsRequireGuard(t *testing.T) {
-	assert := assert.New(t)
-	schema := optionalSchemaWithDateFields()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, mode := range dateCompileModes(t, tt.schema) {
+				t.Run(mode.name, func(t *testing.T) {
+					for _, expression := range tt.success {
+						jp, err := mode.compile(expression)
+						assert.NoError(t, err, expression)
+						assert.NotNil(t, jp, expression)
+					}
 
-	errorCases := []string{
-		"createdDate >= '2026-03-01'",
-		"createdDate < otherDate",
-	}
-	for _, expression := range errorCases {
-		_, err := CompileWithSchema(expression, schema)
-		assert.Error(err, expression)
-		var staticErr *StaticError
-		assert.ErrorAs(err, &staticErr, expression)
-		assert.Equal(staticErrUnsafeOptionalArg, staticErr.Code, expression)
-	}
-
-	successCases := []string{
-		"createdDate && createdDate >= '2026-03-01'",
-		"createdDate != `null` && createdDate >= '2026-03-01'",
-		"createdDate && otherDate && createdDate < otherDate",
-		"not_null(createdDate, '2026-03-01') < not_null(otherDate, '2026-03-02')",
-	}
-	for _, expression := range successCases {
-		jp, err := CompileWithSchema(expression, schema)
-		assert.NoError(err, expression)
-		assert.NotNil(jp, expression)
-	}
-}
-
-func TestCompileWithSchemaOptionalDateComparatorAllowsNotNullDateFallback(t *testing.T) {
-	assert := assert.New(t)
-	schema := dateFieldSchemaWithRequired("otherDate")
-
-	jp, err := CompileWithSchema("not_null(createdDate, '2026-03-01') < otherDate", schema)
-	assert.NoError(err)
-	assert.NotNil(jp)
-}
-
-func TestCompileWithSchemaOptionalDateComparatorAllowsOrDateFallback(t *testing.T) {
-	assert := assert.New(t)
-	schema := dateFieldSchemaWithRequired("otherDate")
-
-	jp, err := CompileWithSchema("(createdDate || '2026-03-01') < otherDate", schema)
-	assert.NoError(err)
-	assert.NotNil(jp)
-}
-
-func TestCompileWithSchemaOptionalDateComparatorAllowsLiteralFirstOrDateFallback(t *testing.T) {
-	assert := assert.New(t)
-	schema := dateFieldSchemaWithRequired("otherDate")
-
-	jp, err := CompileWithSchema("('2026-03-01' || createdDate) < otherDate", schema)
-	assert.NoError(err)
-	assert.NotNil(jp)
-}
-
-func TestCompileWithSchemaOptionalDateComparatorAllowsLiteralFirstNotNullFallback(t *testing.T) {
-	assert := assert.New(t)
-	schema := dateFieldSchemaWithRequired("otherDate")
-
-	jp, err := CompileWithSchema("otherDate > not_null('2026-03-01', createdDate)", schema)
-	assert.NoError(err)
-	assert.NotNil(jp)
-}
-
-func TestCompileWithCompiledSchemaOptionalDateComparatorAllowsLiteralFirstOrDateFallback(t *testing.T) {
-	assert := assert.New(t)
-	cs, err := CompileSchema(dateFieldSchemaWithRequired("otherDate"))
-	assert.NoError(err)
-
-	jp, err := CompileWithCompiledSchema("('2026-03-01' || createdDate) < otherDate", cs)
-	assert.NoError(err)
-	assert.NotNil(jp)
-}
-
-func TestCompileWithCompiledSchemaDateComparators(t *testing.T) {
-	assert := assert.New(t)
-	cs, err := CompileSchema(schemaWithDateFields())
-	assert.NoError(err)
-
-	jp, err := CompileWithCompiledSchema("createdDate >= otherDate", cs)
-	assert.NoError(err)
-	assert.NotNil(jp)
-
-	_, err = CompileWithCompiledSchema("createdDate >= status", cs)
-	assert.Error(err)
-	var staticErr *StaticError
-	assert.ErrorAs(err, &staticErr)
-	assert.Equal(staticErrInvalidComparator, staticErr.Code)
-}
-
-func TestCompileWithCompiledSchemaOptionalDateComparatorsRequireGuard(t *testing.T) {
-	assert := assert.New(t)
-	cs, err := CompileSchema(optionalSchemaWithDateFields())
-	assert.NoError(err)
-
-	_, err = CompileWithCompiledSchema("createdDate >= otherDate", cs)
-	assert.Error(err)
-	var staticErr *StaticError
-	assert.ErrorAs(err, &staticErr)
-	assert.Equal(staticErrUnsafeOptionalArg, staticErr.Code)
-
-	jp, err := CompileWithCompiledSchema("createdDate && createdDate >= '2026-03-01'", cs)
-	assert.NoError(err)
-	assert.NotNil(jp)
-
-	jp, err = CompileWithCompiledSchema("not_null(createdDate, '2026-03-01') < not_null(otherDate, '2026-03-02')", cs)
-	assert.NoError(err)
-	assert.NotNil(jp)
-}
-
-func TestInferTypeWithCompiledSchemaDateComparator(t *testing.T) {
-	assert := assert.New(t)
-	cs, err := CompileSchema(schemaWithDateFields())
-	assert.NoError(err)
-
-	inferred, err := InferTypeWithCompiledSchema("createdDate >= '2026-03-01'", cs)
-	assert.NoError(err)
-	if assert.NotNil(inferred) {
-		assert.True(inferred.IsBoolean())
+					for _, failure := range tt.failures {
+						jp, err := mode.compile(failure.expression)
+						assert.Nil(t, jp, failure.expression)
+						assertStaticErrorCode(t, err, failure.code, failure.expression)
+					}
+				})
+			}
+		})
 	}
 }
 
-func TestInferTypeWithCompiledSchemaOptionalDateComparatorFails(t *testing.T) {
-	assert := assert.New(t)
-	cs, err := CompileSchema(optionalSchemaWithDateFields())
-	assert.NoError(err)
+func TestInferTypeWithCompiledSchemaDateComparators(t *testing.T) {
+	tests := []struct {
+		name       string
+		schema     JSONSchema
+		expression string
+		code       string
+	}{
+		{
+			name:       "required date comparator",
+			schema:     schemaWithDateFields(),
+			expression: "createdDate >= '2026-03-01'",
+		},
+		{
+			name:       "optional date comparator requires guard",
+			schema:     optionalSchemaWithDateFields(),
+			expression: "createdDate >= '2026-03-01'",
+			code:       staticErrUnsafeOptionalArg,
+		},
+	}
 
-	inferred, err := InferTypeWithCompiledSchema("createdDate >= '2026-03-01'", cs)
-	assert.Error(err)
-	assert.Nil(inferred)
-	var staticErr *StaticError
-	assert.ErrorAs(err, &staticErr)
-	assert.Equal(staticErrUnsafeOptionalArg, staticErr.Code)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inferred, err := InferTypeWithCompiledSchema(tt.expression, compileDateSchema(t, tt.schema))
+			if tt.code == "" {
+				assert.NoError(t, err)
+				if assert.NotNil(t, inferred) {
+					assert.True(t, inferred.IsBoolean())
+				}
+				return
+			}
+
+			assert.Nil(t, inferred)
+			assertStaticErrorCode(t, err, tt.code, tt.expression)
+		})
+	}
 }
