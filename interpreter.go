@@ -2,7 +2,6 @@ package jmespath
 
 import (
 	"errors"
-	"fmt"
 	"reflect"
 	"unicode"
 	"unicode/utf8"
@@ -345,13 +344,13 @@ func compareNumbers(operator tokType, left, right interface{}) (interface{}, err
 }
 
 func (intr *treeInterpreter) compareDates(operator tokType, left, right interface{}, plan comparatorPlan) (interface{}, error) {
-	leftDate, err := runtimeDateValue(left, plan.leftDateLiteral)
-	if err != nil {
-		return nil, err
+	leftDate, ok := runtimeDateValue(left, plan.leftDateLiteral)
+	if !ok {
+		return nil, nil
 	}
-	rightDate, err := runtimeDateValue(right, plan.rightDateLiteral)
-	if err != nil {
-		return nil, err
+	rightDate, ok := runtimeDateValue(right, plan.rightDateLiteral)
+	if !ok {
+		return nil, nil
 	}
 	switch operator {
 	// Valid YYYY-MM-DD strings are lexicographically ordered the same way as
@@ -369,23 +368,19 @@ func (intr *treeInterpreter) compareDates(operator tokType, left, right interfac
 	}
 }
 
-func runtimeDateValue(value interface{}, prevalidatedLiteral string) (string, error) {
+func runtimeDateValue(value interface{}, prevalidatedLiteral string) (string, bool) {
 	if prevalidatedLiteral != "" {
-		return prevalidatedLiteral, nil
+		return prevalidatedLiteral, true
 	}
 	dateString, ok := value.(string)
 	if !ok {
-		return "", invalidTypeError("expected date string in YYYY-MM-DD format")
+		return "", false
 	}
 	// Validate the runtime value without allocating/parsing time.Time on the hot path.
 	if err := validateDateString(dateString); err != nil {
-		return "", invalidTypeError(fmt.Sprintf("expected date string in YYYY-MM-DD format: %v", err))
+		return "", false
 	}
-	return dateString, nil
-}
-
-func invalidTypeError(message string) error {
-	return fmt.Errorf("invalid-type: %s", message)
+	return dateString, true
 }
 
 func (intr *treeInterpreter) fieldFromStruct(key string, value interface{}) (interface{}, error) {

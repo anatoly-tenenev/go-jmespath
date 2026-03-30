@@ -110,6 +110,12 @@ func TestInferTypeWithCompiledSchemaSuccessCases(t *testing.T) {
 			},
 		},
 		{
+			expression: "count > `0`",
+			assertType: func(a *assert.Assertions, typ *InferredType) {
+				a.Equal(TypeBoolean, typ.Mask)
+			},
+		},
+		{
 			expression: "type(name)",
 			assertType: func(a *assert.Assertions, typ *InferredType) {
 				a.Equal(TypeString, typ.Mask)
@@ -310,6 +316,12 @@ func TestInferTypeNullableOptionalAndNotNull(t *testing.T) {
 				a.Equal(TypeObject|TypeNull, typ.Mask)
 				a.NotNil(typ.Properties)
 				a.Equal(TypeString, typ.Properties["id"].Mask)
+			},
+		},
+		{
+			expression: "optional_number > `4`",
+			assertType: func(a *assert.Assertions, typ *InferredType) {
+				a.Equal(TypeBoolean|TypeNull, typ.Mask)
 			},
 		},
 		{
@@ -581,6 +593,9 @@ func inferTypeNullableSchema() JSONSchema {
 			},
 			"optional_name": map[string]interface{}{
 				"type": "string",
+			},
+			"optional_number": map[string]interface{}{
+				"type": "number",
 			},
 			"numbers": map[string]interface{}{
 				"type": "array",

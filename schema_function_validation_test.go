@@ -185,6 +185,7 @@ func TestSchemaCompileFunctionValidationNullableSafety(t *testing.T) {
 		"optional_path || 'fallback'",
 		"items[10] != `null` && contains(items[10], 'retry')",
 		"optional_number > `4`",
+		"optional_number > `4` && abs(optional_number)",
 		"content.sections.summary",
 		"items[10]",
 		"sum(numbers)",

@@ -105,7 +105,7 @@ func TestDateComparatorRuntime(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			for _, mode := range dateCompileModes(t, tt.schema) {
+			for _, mode := range schemaCompileModes(t, tt.schema) {
 				mode := mode
 				t.Run(mode.name, func(t *testing.T) {
 					jp, err := mode.compile(tt.expression)
@@ -167,14 +167,14 @@ func TestDateComparatorPrecomputesLiteralDates(t *testing.T) {
 	}
 }
 
-func TestDateComparatorRuntimeRejectsInvalidValues(t *testing.T) {
+func TestDateComparatorRuntimeReturnsNullForInvalidOrNullableValues(t *testing.T) {
 	tests := []struct {
 		name       string
 		expression string
 		input      map[string]interface{}
 	}{
 		{
-			name:       "rejects invalid left date string",
+			name:       "returns null for invalid left date string",
 			expression: "createdDate >= otherDate",
 			input: map[string]interface{}{
 				"createdDate": "draft",
@@ -182,11 +182,18 @@ func TestDateComparatorRuntimeRejectsInvalidValues(t *testing.T) {
 			},
 		},
 		{
-			name:       "rejects nil right date",
+			name:       "returns null for nil right date",
 			expression: "createdDate >= otherDate",
 			input: map[string]interface{}{
 				"createdDate": "2026-03-01",
 				"otherDate":   nil,
+			},
+		},
+		{
+			name:       "returns null for missing left date",
+			expression: "createdDate >= otherDate",
+			input: map[string]interface{}{
+				"otherDate": "2026-03-02",
 			},
 		},
 	}
@@ -194,7 +201,7 @@ func TestDateComparatorRuntimeRejectsInvalidValues(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			for _, mode := range dateCompileModes(t, schemaWithDateFields()) {
+			for _, mode := range schemaCompileModes(t, schemaWithDateFields()) {
 				mode := mode
 				t.Run(mode.name, func(t *testing.T) {
 					jp, err := mode.compile(tt.expression)
@@ -203,9 +210,9 @@ func TestDateComparatorRuntimeRejectsInvalidValues(t *testing.T) {
 						return
 					}
 
-					_, err = jp.Search(tt.input)
-					assert.Error(t, err)
-					assert.Contains(t, err.Error(), "invalid-type")
+					result, err := jp.Search(tt.input)
+					assert.NoError(t, err)
+					assert.Nil(t, result)
 				})
 			}
 		})

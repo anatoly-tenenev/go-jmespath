@@ -156,7 +156,7 @@ For high-throughput usage, prefer `InferTypeWithCompiledSchema` to avoid recompi
 `CompileSchema` validates the supported subset strictly: unknown schema keywords fail with `unsupported_schema`, while metadata fields `title`, `description`, `default`, and `examples` are ignored.
 
 Supported schema-aware string formats:
-- `type: "string", format: "date"` for range comparators (`>`, `>=`, `<`, `<=`) against other date fields or `YYYY-MM-DD` string literals. Date operands must be schema-required/non-null, or explicitly guarded before comparison.
+- `type: "string", format: "date"` for range comparators (`>`, `>=`, `<`, `<=`) against other date fields or `YYYY-MM-DD` string literals. Nullable date operands are allowed when their non-null branches remain provably comparable; such comparators infer `boolean|null` and evaluate to `null` for missing, null, or invalid date values.
 
 ## More Resources
 

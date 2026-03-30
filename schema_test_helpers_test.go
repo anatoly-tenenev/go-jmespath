@@ -1,5 +1,60 @@
 package jmespath
 
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+type schemaCompileMode struct {
+	name    string
+	compile func(string) (*JMESPath, error)
+}
+
+func compileSchemaForTest(t *testing.T, schema JSONSchema) *CompiledSchema {
+	t.Helper()
+
+	cs, err := CompileSchema(schema)
+	if err != nil {
+		t.Fatalf("CompileSchema() unexpected error: %v", err)
+	}
+	if cs == nil {
+		t.Fatal("CompileSchema() returned nil compiled schema")
+	}
+	return cs
+}
+
+func schemaCompileModes(t *testing.T, schema JSONSchema) []schemaCompileMode {
+	t.Helper()
+
+	cs := compileSchemaForTest(t, schema)
+	return []schemaCompileMode{
+		{
+			name: "CompileWithSchema",
+			compile: func(expression string) (*JMESPath, error) {
+				return CompileWithSchema(expression, schema)
+			},
+		},
+		{
+			name: "CompileWithCompiledSchema",
+			compile: func(expression string) (*JMESPath, error) {
+				return CompileWithCompiledSchema(expression, cs)
+			},
+		},
+	}
+}
+
+func assertStaticErrorCode(t *testing.T, err error, expectedCode, expression string) {
+	t.Helper()
+
+	assert.Error(t, err, expression)
+	var staticErr *StaticError
+	if !assert.ErrorAs(t, err, &staticErr, expression) {
+		return
+	}
+	assert.Equal(t, expectedCode, staticErr.Code, expression)
+}
+
 func compileTestSchema() JSONSchema {
 	return JSONSchema{
 		"type": "object",

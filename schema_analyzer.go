@@ -563,7 +563,7 @@ func (a *schemaAnalyzer) analyzeComparator(node ASTNode, input *staticType) (*st
 	// Persist the comparator plan on the AST offset so the interpreter can reuse
 	// compile-time decisions on the runtime hot path.
 	a.comparatorPlans[node.offset] = plan
-	return staticBooleanTypeValue, nil
+	return orderedComparatorResultType(left, right), nil
 }
 
 func (a *schemaAnalyzer) validateOrderedComparator(node, leftNode, rightNode ASTNode, left, right *staticType) (comparatorPlan, error) {
@@ -579,9 +579,6 @@ func (a *schemaAnalyzer) validateOrderedComparator(node, leftNode, rightNode AST
 	leftDateSchema := leftNonNull.hasStringFormat(stringFormatDate)
 	rightDateSchema := rightNonNull.hasStringFormat(stringFormatDate)
 	if leftDateSchema || rightDateSchema {
-		if err := a.validateDateComparatorNullSafety(node, left, right, leftDateSchema, rightDateSchema); err != nil {
-			return comparatorPlan{}, err
-		}
 		leftMatches, leftLiteral := a.dateComparatorOperand(leftNode, leftNonNull, rightDateSchema)
 		rightMatches, rightLiteral := a.dateComparatorOperand(rightNode, rightNonNull, leftDateSchema)
 		if !leftMatches || !rightMatches {
@@ -597,14 +594,11 @@ func (a *schemaAnalyzer) validateOrderedComparator(node, leftNode, rightNode AST
 	return comparatorPlan{}, a.errorAt(node, staticErrInvalidComparator, "comparator requires number operands or date operands")
 }
 
-func (a *schemaAnalyzer) validateDateComparatorNullSafety(node ASTNode, left, right *staticType, leftDateSchema, rightDateSchema bool) error {
-	if leftDateSchema && left.includes(staticMaskNull) {
-		return a.errorAt(node, staticErrUnsafeOptionalArg, "date comparator operand may be missing or null and can trigger invalid-type")
+func orderedComparatorResultType(left, right *staticType) *staticType {
+	if normalizeStaticType(left).includes(staticMaskNull) || normalizeStaticType(right).includes(staticMaskNull) {
+		return staticNullable(staticBooleanTypeValue)
 	}
-	if rightDateSchema && right.includes(staticMaskNull) {
-		return a.errorAt(node, staticErrUnsafeOptionalArg, "date comparator operand may be missing or null and can trigger invalid-type")
-	}
-	return nil
+	return staticBooleanTypeValue
 }
 
 func (a *schemaAnalyzer) dateComparatorOperand(node ASTNode, typ *staticType, otherIsDateSchema bool) (bool, string) {

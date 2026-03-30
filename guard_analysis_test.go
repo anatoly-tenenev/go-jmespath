@@ -246,6 +246,17 @@ func TestGuardAnalysisWhenTrue(t *testing.T) {
 			},
 		},
 		{
+			name:       "gte_optional_date_literal_guards_path",
+			schema:     optionalSchemaWithDateFields(),
+			expression: "createdDate >= '2026-03-01'",
+			protected:  []string{"createdDate"},
+			notProtected: []string{
+				"otherDate",
+				"status",
+				"count",
+			},
+		},
+		{
 			name:       "gt_two_paths_guards_both",
 			schema:     guardFlatSchema(false),
 			expression: "a > b",

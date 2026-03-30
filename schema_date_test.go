@@ -45,58 +45,9 @@ func dateFieldSchemaWithRequired(requiredFields ...string) JSONSchema {
 	return schema
 }
 
-type dateCompileMode struct {
-	name    string
-	compile func(string) (*JMESPath, error)
-}
-
 type dateCompileExpectation struct {
 	expression string
 	code       string
-}
-
-func compileDateSchema(t *testing.T, schema JSONSchema) *CompiledSchema {
-	t.Helper()
-
-	cs, err := CompileSchema(schema)
-	if err != nil {
-		t.Fatalf("CompileSchema() unexpected error: %v", err)
-	}
-	if cs == nil {
-		t.Fatal("CompileSchema() returned nil compiled schema")
-	}
-	return cs
-}
-
-func dateCompileModes(t *testing.T, schema JSONSchema) []dateCompileMode {
-	t.Helper()
-
-	cs := compileDateSchema(t, schema)
-	return []dateCompileMode{
-		{
-			name: "CompileWithSchema",
-			compile: func(expression string) (*JMESPath, error) {
-				return CompileWithSchema(expression, schema)
-			},
-		},
-		{
-			name: "CompileWithCompiledSchema",
-			compile: func(expression string) (*JMESPath, error) {
-				return CompileWithCompiledSchema(expression, cs)
-			},
-		},
-	}
-}
-
-func assertStaticErrorCode(t *testing.T, err error, expectedCode, expression string) {
-	t.Helper()
-
-	assert.Error(t, err, expression)
-	var staticErr *StaticError
-	if !assert.ErrorAs(t, err, &staticErr, expression) {
-		return
-	}
-	assert.Equal(t, expectedCode, staticErr.Code, expression)
 }
 
 func TestCompileSchemaSupportsStringDateFormat(t *testing.T) {
@@ -253,7 +204,7 @@ func TestCompileSchemaDateFormatConstraints(t *testing.T) {
 				return
 			}
 
-			compiled := compileDateSchema(t, tt.schema)
+			compiled := compileSchemaForTest(t, tt.schema)
 			if !assert.NotNil(t, compiled.root) || !assert.NotNil(t, compiled.staticRoot) {
 				return
 			}
@@ -290,18 +241,21 @@ func TestSchemaCompileDateComparators(t *testing.T) {
 			},
 		},
 		{
-			name:   "optional date fields require guard",
+			name:   "optional date fields stay comparable",
 			schema: optionalSchemaWithDateFields(),
 			success: []string{
+				"createdDate >= '2026-03-01'",
+				"createdDate < otherDate",
+				"createdDate >= otherDate",
 				"createdDate && createdDate >= '2026-03-01'",
 				"createdDate != `null` && createdDate >= '2026-03-01'",
 				"createdDate && otherDate && createdDate < otherDate",
 				"not_null(createdDate, '2026-03-01') < not_null(otherDate, '2026-03-02')",
 			},
 			failures: []dateCompileExpectation{
-				{expression: "createdDate >= '2026-03-01'", code: staticErrUnsafeOptionalArg},
-				{expression: "createdDate < otherDate", code: staticErrUnsafeOptionalArg},
-				{expression: "createdDate >= otherDate", code: staticErrUnsafeOptionalArg},
+				{expression: "createdDate >= 'draft'", code: staticErrInvalidComparator},
+				{expression: "createdDate >= status", code: staticErrInvalidComparator},
+				{expression: "createdDate >= `10`", code: staticErrInvalidComparator},
 			},
 		},
 		{
@@ -318,7 +272,7 @@ func TestSchemaCompileDateComparators(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			for _, mode := range dateCompileModes(t, tt.schema) {
+			for _, mode := range schemaCompileModes(t, tt.schema) {
 				t.Run(mode.name, func(t *testing.T) {
 					for _, expression := range tt.success {
 						jp, err := mode.compile(expression)
@@ -342,28 +296,36 @@ func TestInferTypeWithCompiledSchemaDateComparators(t *testing.T) {
 		name       string
 		schema     JSONSchema
 		expression string
+		mask       TypeMask
 		code       string
 	}{
 		{
 			name:       "required date comparator",
 			schema:     schemaWithDateFields(),
 			expression: "createdDate >= '2026-03-01'",
+			mask:       TypeBoolean,
 		},
 		{
-			name:       "optional date comparator requires guard",
+			name:       "optional date comparator to literal",
 			schema:     optionalSchemaWithDateFields(),
 			expression: "createdDate >= '2026-03-01'",
-			code:       staticErrUnsafeOptionalArg,
+			mask:       TypeBoolean | TypeNull,
+		},
+		{
+			name:       "optional date comparator to date field",
+			schema:     optionalSchemaWithDateFields(),
+			expression: "createdDate >= otherDate",
+			mask:       TypeBoolean | TypeNull,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			inferred, err := InferTypeWithCompiledSchema(tt.expression, compileDateSchema(t, tt.schema))
+			inferred, err := InferTypeWithCompiledSchema(tt.expression, compileSchemaForTest(t, tt.schema))
 			if tt.code == "" {
 				assert.NoError(t, err)
 				if assert.NotNil(t, inferred) {
-					assert.True(t, inferred.IsBoolean())
+					assert.Equal(t, tt.mask, inferred.Mask)
 				}
 				return
 			}
