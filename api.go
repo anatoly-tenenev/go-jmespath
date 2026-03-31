@@ -91,7 +91,7 @@ func CompileWithCompiledSchemaOptions(expression string, cs *CompiledSchema, opt
 		guardsWhenTrue = analyzeGuardsWhenTrue(ast)
 	}
 	return &JMESPath{
-		ast:            ast,
+		ast: ast,
 		// The interpreter consumes compile-time comparator plans to avoid repeating
 		// date-format checks and literal parsing work during Search.
 		intr:           newInterpreterWithComparatorPlans(analysis.comparatorPlans),

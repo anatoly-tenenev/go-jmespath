@@ -37,10 +37,12 @@ const (
 )
 
 type staticObjectType struct {
-	properties       map[string]*staticType
-	required         map[string]struct{}
-	additionalMode   additionalPropertiesMode
-	additionalSchema *staticType
+	properties                 map[string]*staticType
+	required                   map[string]struct{}
+	unverifiableProperties     map[string]struct{}
+	additionalMode             additionalPropertiesMode
+	additionalSchema           *staticType
+	verifiableAdditionalAccess bool
 }
 
 type staticArrayType struct {
@@ -92,6 +94,11 @@ func staticFromSchemaNode(node *schemaNode, cache map[*schemaNode]*staticType) *
 	if cached, exists := cache[node]; exists {
 		return cached
 	}
+	if len(node.oneOf) != 0 {
+		merged := staticFromOneOf(node.oneOf, cache)
+		cache[node] = merged
+		return merged
+	}
 	current := &staticType{mask: schemaKindMask(node.kind)}
 	cache[node] = current
 	current.constValue = node.constValue
@@ -103,10 +110,11 @@ func staticFromSchemaNode(node *schemaNode, cache map[*schemaNode]*staticType) *
 	switch node.kind {
 	case schemaKindObject:
 		obj := &staticObjectType{
-			properties:       nil,
-			required:         node.required,
-			additionalMode:   node.additionalPropertiesMode,
-			additionalSchema: nil,
+			properties:                 nil,
+			required:                   node.required,
+			additionalMode:             node.additionalPropertiesMode,
+			additionalSchema:           nil,
+			verifiableAdditionalAccess: false,
 		}
 		if len(node.properties) > 0 {
 			obj.properties = make(map[string]*staticType, len(node.properties))
@@ -348,6 +356,9 @@ func (a *schemaAnalyzer) analyzeField(node ASTNode, input *staticType) (*staticT
 		return nil, a.errorAt(node, staticErrUnverifiableType, "cannot prove field target is object")
 	}
 	name, _ := node.value.(string)
+	if targetWithoutNull.object.isPropertyUnverifiable(name) {
+		return nil, a.errorAt(node, staticErrUnverifiableProperty, fmt.Sprintf("property %q is not verifiable from schema", name))
+	}
 	if targetWithoutNull.object.properties != nil {
 		if value, exists := targetWithoutNull.object.properties[name]; exists {
 			result := value
@@ -363,7 +374,16 @@ func (a *schemaAnalyzer) analyzeField(node ASTNode, input *staticType) (*staticT
 	switch targetWithoutNull.object.additionalMode {
 	case additionalPropertiesForbid:
 		return nil, a.errorAt(node, staticErrUnknownProperty, fmt.Sprintf("unknown property %q", name))
-	case additionalPropertiesAllowOpen, additionalPropertiesTyped:
+	case additionalPropertiesTyped:
+		if targetWithoutNull.object.verifiableAdditionalAccess && targetWithoutNull.object.additionalSchema != nil {
+			result := targetWithoutNull.object.additionalSchema
+			if target.includes(staticMaskNull) {
+				result = staticNullable(result)
+			}
+			return result, nil
+		}
+		return nil, a.errorAt(node, staticErrUnverifiableProperty, fmt.Sprintf("property %q is not verifiable from schema", name))
+	case additionalPropertiesAllowOpen:
 		return nil, a.errorAt(node, staticErrUnverifiableProperty, fmt.Sprintf("property %q is not verifiable from schema", name))
 	default:
 		return nil, a.errorAt(node, staticErrUnverifiableProperty, fmt.Sprintf("property %q is not verifiable from schema", name))
@@ -1241,7 +1261,8 @@ func staticOpenObject() *staticType {
 	return &staticType{
 		mask: staticMaskObject,
 		object: &staticObjectType{
-			additionalMode: additionalPropertiesAllowOpen,
+			additionalMode:             additionalPropertiesAllowOpen,
+			verifiableAdditionalAccess: false,
 		},
 	}
 }
@@ -1250,8 +1271,9 @@ func staticClosedObject(properties map[string]*staticType) *staticType {
 	return &staticType{
 		mask: staticMaskObject,
 		object: &staticObjectType{
-			properties:     properties,
-			additionalMode: additionalPropertiesForbid,
+			properties:                 properties,
+			additionalMode:             additionalPropertiesForbid,
+			verifiableAdditionalAccess: false,
 		},
 	}
 }
@@ -1284,9 +1306,7 @@ func staticUnion(left, right *staticType) *staticType {
 	if union.mask&staticMaskObject != 0 {
 		switch {
 		case l.includes(staticMaskObject) && r.includes(staticMaskObject):
-			if l.object != nil && r.object != nil && l.object == r.object {
-				union.object = l.object
-			}
+			union.object = staticUnionObjectTypes(l.object, r.object)
 		case l.includes(staticMaskObject):
 			union.object = l.object
 		case r.includes(staticMaskObject):
@@ -1302,19 +1322,18 @@ func unionScalarConstraints(left, right *staticType, unionMask staticTypeMask) (
 	if unionMask&(staticMaskObject|staticMaskArray) != 0 {
 		return nil, nil
 	}
-	if left.mask == staticMaskNull {
-		return right.constValue, right.enumValues
+	values, bounded, kind, ok := collectUnionScalarConstraintValues(left, right, unionMask)
+	if !ok || !bounded || len(values) == 0 {
+		return nil, nil
 	}
-	if right.mask == staticMaskNull {
-		return left.constValue, left.enumValues
+	if len(values) == 1 {
+		value := values[0]
+		if value.kind == kind {
+			return &value, nil
+		}
+		return nil, nil
 	}
-	if left.constValue != nil && right.constValue != nil && left.constValue.equals(*right.constValue) {
-		return left.constValue, nil
-	}
-	if left.enumValues != nil && right.enumValues != nil && scalarLiteralSetsEqual(left.enumValues, right.enumValues) {
-		return nil, left.enumValues
-	}
-	return nil, nil
+	return nil, scalarLiteralSetFromValues(values)
 }
 
 func scalarLiteralSetsEqual(left, right *scalarLiteralSet) bool {
@@ -1512,6 +1531,14 @@ func (t *staticObjectType) isRequired(name string) bool {
 		return false
 	}
 	_, exists := t.required[name]
+	return exists
+}
+
+func (t *staticObjectType) isPropertyUnverifiable(name string) bool {
+	if t == nil || len(t.unverifiableProperties) == 0 {
+		return false
+	}
+	_, exists := t.unverifiableProperties[name]
 	return exists
 }
 

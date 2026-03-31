@@ -31,6 +31,7 @@ const (
 
 type schemaNode struct {
 	kind                       schemaKind
+	oneOf                      []*schemaNode
 	properties                 map[string]*schemaNode
 	required                   map[string]struct{}
 	items                      *schemaNode

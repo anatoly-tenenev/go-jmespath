@@ -155,6 +155,23 @@ For high-throughput usage, prefer `InferTypeWithCompiledSchema` to avoid recompi
 
 `CompileSchema` validates the supported subset strictly: unknown schema keywords fail with `unsupported_schema`, while metadata fields `title`, `description`, `default`, and `examples` are ignored.
 
+Supported structural schema keywords:
+- `type`
+- `format`
+- `properties`
+- `required`
+- `items`
+- `additionalProperties`
+- `const`
+- `enum`
+- `oneOf`
+
+Current `oneOf` support is intentionally conservative:
+- `oneOf` is treated as a compile-time union for schema-aware validation and type inference.
+- `oneOf` must be a non-empty array of schema objects.
+- In the same schema node, `oneOf` cannot be combined with sibling structural keywords such as `type`, `properties`, `items`, `additionalProperties`, `const`, or `enum`.
+- `oneOf` works recursively inside `properties`, `items`, and typed `additionalProperties`.
+
 Supported schema-aware string formats:
 - `type: "string", format: "date"` for range comparators (`>`, `>=`, `<`, `<=`) against other date fields or `YYYY-MM-DD` string literals. Nullable date operands are allowed when their non-null branches remain provably comparable; such comparators infer `boolean|null` and evaluate to `null` for missing, null, or invalid date values.
 

@@ -14,6 +14,7 @@ var supportedSchemaKeywords = map[string]struct{}{
 	"additionalProperties": {},
 	"const":                {},
 	"enum":                 {},
+	"oneOf":                {},
 }
 
 var ignoredSchemaMetadataKeywords = map[string]struct{}{
@@ -25,7 +26,6 @@ var ignoredSchemaMetadataKeywords = map[string]struct{}{
 
 var unsupportedSchemaKeywords = map[string]struct{}{
 	"$ref":                  {},
-	"oneOf":                 {},
 	"anyOf":                 {},
 	"allOf":                 {},
 	"if":                    {},
@@ -56,6 +56,16 @@ func compileSchemaNode(raw map[string]interface{}, path string) (*schemaNode, er
 	}
 	if err := validateSchemaKeywords(raw, path); err != nil {
 		return nil, err
+	}
+	if _, hasOneOf := raw["oneOf"]; hasOneOf {
+		if err := validateOneOfSiblings(raw, path); err != nil {
+			return nil, err
+		}
+		branches, err := compileOneOf(raw["oneOf"], path)
+		if err != nil {
+			return nil, err
+		}
+		return &schemaNode{oneOf: branches}, nil
 	}
 
 	kind, hasType, err := parseSchemaKind(raw["type"], path)

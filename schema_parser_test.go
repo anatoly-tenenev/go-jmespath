@@ -51,7 +51,6 @@ func TestCompileSchemaUnsupportedKeywords(t *testing.T) {
 	assert := assert.New(t)
 	keywords := []string{
 		"$ref",
-		"oneOf",
 		"anyOf",
 		"allOf",
 		"if",
