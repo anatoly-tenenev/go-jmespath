@@ -175,7 +175,18 @@ func staticUnionAdditionalAccess(left, right *staticObjectType) (additionalPrope
 		return additionalPropertiesForbid, nil, false
 	}
 
-	return additionalPropertiesTyped, staticUnion(leftType, rightType), true
+	typedContributors := 0
+	if leftHasTyped {
+		typedContributors++
+	}
+	if rightHasTyped {
+		typedContributors++
+	}
+
+	// Unknown-field access is only verifiable when a single branch contributes
+	// typed additionalProperties. Multiple contributing branches keep the
+	// resulting field shape ambiguous under oneOf.
+	return additionalPropertiesTyped, staticUnion(leftType, rightType), typedContributors == 1
 }
 
 func additionalPropertyContribution(obj *staticObjectType) (*staticType, propertyContributionStatus, bool) {

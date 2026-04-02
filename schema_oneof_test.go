@@ -171,6 +171,59 @@ func TestOneOfArrayBehavior(t *testing.T) {
 	}
 }
 
+func TestOneOfConstWithNullAllowsNullLiteralComparator(t *testing.T) {
+	schema := JSONSchema{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"value": map[string]interface{}{
+				"oneOf": []interface{}{
+					map[string]interface{}{"const": "x"},
+					map[string]interface{}{"type": "null"},
+				},
+			},
+		},
+		"required":             []interface{}{"value"},
+		"additionalProperties": false,
+	}
+
+	for _, mode := range schemaCompileModes(t, schema) {
+		t.Run(mode.name, func(t *testing.T) {
+			jp, err := mode.compile("value == `null`")
+			assert.NoError(t, err)
+			assert.NotNil(t, jp)
+
+			jp, err = mode.compile("value == 'x'")
+			assert.NoError(t, err)
+			assert.NotNil(t, jp)
+
+			_, err = mode.compile("value == 'y'")
+			assertStaticErrorCode(t, err, staticErrInvalidEnumValue, "value == 'y'")
+		})
+	}
+}
+
+func TestOneOfTypedAdditionalPropertiesRemainUnverifiableForUnknownField(t *testing.T) {
+	schema := JSONSchema{
+		"oneOf": []interface{}{
+			map[string]interface{}{
+				"type":                 "object",
+				"additionalProperties": map[string]interface{}{"type": "number"},
+			},
+			map[string]interface{}{
+				"type":                 "object",
+				"additionalProperties": map[string]interface{}{"type": "number"},
+			},
+		},
+	}
+
+	for _, mode := range schemaCompileModes(t, schema) {
+		t.Run(mode.name, func(t *testing.T) {
+			_, err := mode.compile("foo")
+			assertStaticErrorCode(t, err, staticErrUnverifiableProperty, "foo")
+		})
+	}
+}
+
 func TestOneOfNestedBehavior(t *testing.T) {
 	propertiesSchema := JSONSchema{
 		"type": "object",

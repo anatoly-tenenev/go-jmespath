@@ -1322,18 +1322,30 @@ func unionScalarConstraints(left, right *staticType, unionMask staticTypeMask) (
 	if unionMask&(staticMaskObject|staticMaskArray) != 0 {
 		return nil, nil
 	}
-	values, bounded, kind, ok := collectUnionScalarConstraintValues(left, right, unionMask)
+	if unionMask == staticMaskNull {
+		value := scalarLiteral{kind: scalarLiteralNull}
+		return &value, nil
+	}
+	values, bounded, _, ok := collectUnionScalarConstraintValues(left, right, unionMask)
 	if !ok || !bounded || len(values) == 0 {
 		return nil, nil
 	}
+	if unionMask&staticMaskNull != 0 {
+		appendScalarConstraintValue(&values, mapScalarConstraintKeys(values), scalarLiteral{kind: scalarLiteralNull})
+	}
 	if len(values) == 1 {
 		value := values[0]
-		if value.kind == kind {
-			return &value, nil
-		}
-		return nil, nil
+		return &value, nil
 	}
 	return nil, scalarLiteralSetFromValues(values)
+}
+
+func mapScalarConstraintKeys(values []scalarLiteral) map[string]struct{} {
+	keys := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		keys[value.key()] = struct{}{}
+	}
+	return keys
 }
 
 func scalarLiteralSetsEqual(left, right *scalarLiteralSet) bool {
